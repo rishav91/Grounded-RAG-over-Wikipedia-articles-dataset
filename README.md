@@ -1,322 +1,113 @@
 # Grounded RAG over Wikipedia
 
-An internal **Retrieval Augmented Generation (RAG)** service that answers natural-language questions over a document corpus with **grounded citations**, **confidence scores**, and an explicit **abstain** path when evidence is insufficient. Callers interact through a single API — no UI.
-
-The MVP indexes **1,000 English Wikipedia articles** and proves the full read path: hybrid retrieval, cross-encoder reranking, grounded generation, faithfulness checking, and ACL-aware semantic caching. The architecture is designed to scale toward **10M documents** by swapping infrastructure tiers, not rewriting components.
-
-> See [PRD.md](./PRD.md) for the full product requirements, milestones, and scale roadmap.
-
----
-
-## Table of contents
-
-- [Why this exists](#why-this-exists)
-- [Architecture](#architecture)
-- [Query flow](#query-flow)
-- [Ingestion flow](#ingestion-flow)
-- [Dataset](#dataset)
-- [API](#api)
-- [Milestones](#milestones)
-- [Scale roadmap](#scale-roadmap)
-- [Success metrics](#success-metrics)
-- [License and attribution](#license-and-attribution)
-
----
-
-## Why this exists
-
-Internal teams need trustworthy Q&A over a shared document corpus. Raw LLMs hallucinate. Plain vector search returns passages but no synthesized answer. Neither enforces access boundaries.
-
-This service:
-
-- Retrieves the right passages with **hybrid search** (dense + sparse) and **cross-encoder reranking**
-- Generates answers **strictly grounded** in retrieved chunks, with inline citations
-- **Abstains** when support is weak — the failure mode is *"I do not have enough to answer,"* not fabrication
-- Respects **access context** via metadata pre-filtering and ACL-aware caching
-
----
-
-## Architecture
-
-High-level component view of the two main paths: **write** (ingestion) and **read** (query).
-
-```mermaid
-flowchart TB
-    VecIdx[("Vector index<br/>dense search")]
-    KwIdx[("Keyword index<br/>BM25 sparse search")]
-
-    subgraph WritePath["Write path - ingestion"]
-        HF["Hugging Face<br/>wikimedia/wikipedia"]
-        Loader["Document loader<br/>(streaming slice)"]
-        Chunker["Chunker"]
-        Embedder["Bi-encoder<br/>embeddings"]
-        Meta["Synthetic metadata<br/>doc_type, acl_tags, dates"]
-
-        HF --> Loader --> Chunker --> Embedder
-        Chunker --> Meta
-        Embedder --> VecIdx
-        Meta --> VecIdx
-        Meta --> KwIdx
-        Chunker --> KwIdx
-    end
-
-    subgraph ReadPath["Read path - query"]
-        Client["API caller"]
-        API["Query API<br/>POST /query"]
-        Cache[("Semantic cache<br/>ACL-aware key")]
-        Orch["Orchestrator"]
-        Hybrid["Hybrid retrieval<br/>and metadata pre-filter"]
-        Rerank["Cross-encoder<br/>rerank"]
-        Gen["Grounded generator<br/>and retrieval tool"]
-        Faith["Faithfulness check"]
-
-        Client --> API --> Orch
-        Orch --> Cache
-        Cache -->|hit| Client
-        Cache -->|miss| Hybrid
-        Hybrid --> VecIdx
-        Hybrid --> KwIdx
-        Hybrid --> Rerank --> Gen
-        Gen -->|tool call| Hybrid
-        Gen --> Faith
-        Faith -->|grounded| Cache
-        Faith -->|weak support| Client
-        Cache --> Client
-    end
-```
-
----
-
-## Query flow
-
-End-to-end path for a single query, including cache, retrieval, generation, and abstention.
-
-```mermaid
-sequenceDiagram
-    actor Caller
-    participant API as Query API
-    participant Cache as Semantic Cache
-    participant Ret as Hybrid Retrieval
-    participant Rerank as Cross-Encoder
-    participant Gen as Generator
-    participant Faith as Faithfulness Check
-
-    Caller->>API: POST /query<br/>query + access_context + filters
-    API->>Cache: Lookup (semantic cluster, tenant, ACL signature)
-
-    alt Cache hit
-        Cache-->>Caller: Cached answer + citations
-    else Cache miss
-        API->>Ret: Hybrid search under ACL/metadata pre-filter
-        Ret-->>API: Fused candidate set
-        API->>Rerank: Rerank to top-k
-        Rerank-->>API: Precise top-k chunks
-        API->>Gen: Generate with citations
-        opt Insufficient first pass
-            Gen->>Ret: Call retrieval tool
-            Ret-->>Gen: Additional chunks
-        end
-        Gen-->>API: Draft answer + citations
-        API->>Faith: Score answer vs. retrieved chunks
-
-        alt Grounded
-            Faith-->>API: Pass
-            API->>Cache: Write-through (ACL-aware key)
-            API-->>Caller: answer, citations, confidence
-        else Weak support
-            Faith-->>API: Fail
-            API-->>Caller: abstained=true, retrieved_chunks only
-        end
-    end
-```
-
----
-
-## Ingestion flow
-
-Batch ingestion for the MVP. At scale this becomes a change-driven pipeline with cheap metadata-only updates vs. expensive re-embed paths.
-
-```mermaid
-flowchart LR
-    A["Load dataset<br/>(streaming)"] --> B["Take 1K slice<br/>(MVP)"]
-    B --> C["Chunk documents<br/>5-15 chunks/doc"]
-    C --> D["Attach synthetic metadata<br/>doc_type, acl_tags, dates"]
-    D --> E["Embed chunks<br/>(bi-encoder)"]
-    E --> F["Write vector index"]
-    C --> G["Write keyword index<br/>(BM25)"]
-    D --> F
-    D --> G
-    F --> H["Searchable corpus"]
-    G --> H
-```
-
----
-
-## Dataset
-
-| Property | Detail |
-|----------|--------|
-| Source | [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) on Hugging Face (English split) |
-| MVP size | 1,000 articles (deterministic slice) |
-| Scale path | Same loader, remove cap, stream in batches |
-| License | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) — attribution required |
-| Fields | `id`, `url`, `title`, `text` |
-
-**Synthetic metadata** (deterministic, assigned at ingestion):
-
-- `doc_type` — derived from article characteristics (e.g. length bands)
-- `acl_tags` — hashed doc ID into synthetic access groups
-- `created_at` / `updated_at` — for date-range filtering and freshness logic
-
-```python
-from datasets import load_dataset
-
-ds = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
-mvp_docs = []
-for i, row in enumerate(ds):
-    if i >= 1000:
-        break
-    mvp_docs.append(row)  # id, url, title, text
-```
-
----
-
-## API
-
-Single primary endpoint. Full contract details are in [PRD.md §8](./PRD.md#8-api-contract-mvp).
-
-### Request
-
-```http
-POST /query
-```
-
-```json
-{
-  "query": "Who developed the theory of relativity?",
-  "access_context": { "groups": ["group_a", "group_b"] },
-  "filters": { "doc_type": "optional", "date_range": "optional" },
-  "options": { "top_k": 5, "allow_generation": true }
-}
-```
-
-### Response
-
-```json
-{
-  "answer": "Albert Einstein developed the theory of relativity...",
-  "abstained": false,
-  "confidence": 0.92,
-  "citations": [
-    { "chunk_id": "...", "doc_id": "...", "title": "Albert Einstein", "url": "..." }
-  ],
-  "retrieved_chunks": [
-    { "chunk_id": "...", "text": "...", "score": 0.87 }
-  ]
-}
-```
-
-When `abstained` is `true`, `answer` is `null`, `confidence` reflects weak support, and `retrieved_chunks` still returns the closest matches.
-
----
-
-## Milestones
-
-Build is organized into six MVP milestones plus Phase 2 extensions.
-
-```mermaid
-flowchart TB
-    M0["M0: Ingestion and indexing"] --> M1["M1: Hybrid retrieval and filtering"]
-    M1 --> M2["M2: Cross-encoder reranking"]
-    M2 --> M3["M3: Generation, faithfulness, tool use"]
-    M3 --> M4["M4: ACL-aware semantic caching"]
-    M4 --> M5["M5: Query rewriting and parallel tools"]
-    M5 --> M6["M6: Observability and feedback"]
-```
-
-| Milestone | Scope | Exit criteria |
-|-----------|-------|---------------|
-| **M0** | Batch ingest 1K docs, chunk, embed, index | Every doc searchable in vector + keyword indexes |
-| **M1** | Hybrid retrieval + metadata/ACL pre-filter | Hybrid recall beats vector-only on labeled set |
-| **M2** | Cross-encoder reranking | Rerank improves top-k precision vs. fusion alone |
-| **M3** | Grounded generation, citations, faithfulness, abstain, retrieval tool | Every response grounded with citations or explicit abstention |
-| **M4** | ACL-aware semantic cache | Repeat queries hit cache; cross-context leakage test passes |
-| **M5** | Query rewriting, parallel tool calls | Multi-hop queries work; partial tool failure degrades gracefully |
-| **M6** | Tracing, feedback capture | Any request traceable end-to-end |
-
----
-
-## Scale roadmap
-
-Same component boundaries from MVP to 10M — scaling is staged infrastructure changes.
-
-```mermaid
-flowchart LR
-    MVP["MVP<br/>1K docs<br/>In-memory indexes<br/>Batch ingest"]
-    S1["Stage 1<br/>100K docs<br/>Vector store<br/>Verify hybrid + rerank latency"]
-    S2["Stage 2<br/>1M docs<br/>Int8 quantization<br/>Load testing + cache tuning"]
-    S3["Stage 3<br/>10M docs<br/>Sharded index<br/>Near-real-time ingest<br/>Full SLAs"]
-
-    MVP --> S1 --> S2 --> S3
-```
-
-| Stage | Corpus | What changes | What stays the same |
-|-------|--------|--------------|---------------------|
-| MVP | 1K | In-memory / single-node indexes; batch ingest | All component interfaces |
-| Stage 1 | 100K | Move to a real vector store | Read path logic, API contract |
-| Stage 2 | 1M | Int8 quantization; tune candidate sizes; measure cache hit rate | Faithfulness, abstain logic |
-| Stage 3 | 10M | Shard index; change-driven ingest; alias-based blue/green deploys | Retrieval, rerank, generate, cache components |
-
----
-
-## Success metrics
-
-```mermaid
-flowchart TB
-    root((Quality bar))
-    root --> faith[Faithfulness]
-    root --> retr[Retrieval]
-    root --> safe[Safety]
-    root --> ops[Operations]
-    faith --> f1[Every claim cited]
-    faith --> f2[Unsupported answers abstained]
-    retr --> r1[Hybrid beats vector-only]
-    retr --> r2[Rerank improves top-k]
-    safe --> s1[ACL cache isolation]
-    safe --> s2[No cross-context leakage]
-    ops --> o1[Latency targets per phase]
-    ops --> o2[Cache hit rate validated]
-```
-
-| Category | Metric | Target |
-|----------|--------|--------|
-| Quality | Faithfulness rate (non-abstained answers) | Very high; unsupported answers are defects |
-| Quality | Abstention correctness | Abstain on genuinely unanswerable queries |
-| Quality | Retrieval quality | Each stage (vector → hybrid → rerank) improves on labeled set |
-| Safety | Cross-context cache isolation | Cached answer for context A never served to context B |
-| Ops | Retrieval latency (MVP) | p95 < 500 ms |
-| Ops | End-to-end latency (MVP, cold) | < 5 s including generation |
-
----
-
-## Key design decisions
-
-- **Chunk-level metadata denormalization** — ACL tags and `doc_type` copied onto every chunk so filters apply inside the retrieval query with no join.
-- **ACL-aware semantic cache** — Cache key is `(semantic cluster, tenant, acl signature)`, not query similarity alone.
-- **Generator hosts a retrieval tool** — Deterministic first-pass retrieval guarantees a baseline; the model can fetch more for multi-hop needs.
-- **Quantize and shard at scale** — Int8 quantization cuts index size ~4×; recall loss recovered by full-precision cross-encoder rerank.
-
----
+A personal build to deeply learn and demonstrate six production RAG
+techniques — hybrid search, reranking, tool use, semantic caching, query
+rewriting, and parallel tool calls — end to end, framed as an internal API
+service over a real, public, checkable corpus (1,000 English Wikipedia
+articles for the MVP) rather than synthetic text.
+
+The single most important scope decision: **depth on the MVP's read path —
+hybrid retrieval, cross-encoder reranking, grounded generation, faithfulness
+checking, ACL-aware caching — over literally reaching the 10M-document scale
+target.** The scale roadmap is a design exercise proving the architecture
+holds up on paper; it is not a build commitment. See
+[PRD.md §1](docs/PRD.md#1-summary).
+
+## Governing principle: Verifiable-or-Abstain
+
+> An answer must never leave the system unless every claim in it can be
+> traced to a retrieved chunk the caller is permitted to see. If that
+> traceability cannot be established, the system must abstain — never
+> fabricate, and never ground an answer in evidence the caller's access
+> context doesn't permit.
+
+Every contested decision in [ADRs.md](docs/ADRs.md) resolves against this rule —
+why the faithfulness check has no bypass ([ADR-006](docs/ADRs.md#adr-006)), why
+ACL filtering happens before retrieval rather than after
+([ADR-008](docs/ADRs.md#adr-008)), and why the semantic cache key includes the
+caller's ACL signature ([ADR-005](docs/ADRs.md#adr-005)). Full reasoning in
+[PRD.md §2.5](docs/PRD.md#25-governing-principle-verifiable-or-abstain).
+
+| In scope (MVP) | Deferred (designed for, Phase 2+) | Excluded permanently |
+|---|---|---|
+| Hybrid search + metadata/ACL filtering, reranking, tool use, ACL-aware semantic caching, grounded generation, faithfulness + abstain — all over a 1,000-doc corpus | Query rewriting, parallel tool calls (FR11, FR12); near-real-time ingestion (FR10); observability + feedback (FR13, FR14) | A user-facing UI; real multi-tenant permissions (synthetic ACLs only); multilingual retrieval; fine-tuning any model; a production on-call posture |
+
+Full table with reasons: [PRD.md §2.3](docs/PRD.md#23-non-goals-mvp).
+
+## Locked stack / key constraints
+
+| Layer | Choice | ADR |
+|---|---|---|
+| Orchestration | LangGraph | [ADR-001](docs/ADRs.md#adr-001) |
+| Embeddings | OpenAI `text-embedding-3-small`, 1536 dims | [ADR-002](docs/ADRs.md#adr-002) |
+| Reranker | Cohere Rerank API (`rerank-v3.5`) | [ADR-003](docs/ADRs.md#adr-003) |
+| Search engine | Qdrant — single engine, native hybrid dense + sparse | [ADR-004](docs/ADRs.md#adr-004) |
+| Semantic cache | A second Qdrant collection (`query_cache`), ACL-signature keyed | [ADR-005](docs/ADRs.md#adr-005) |
+| Faithfulness check | LLM-as-judge, structured rubric prompt | [ADR-006](docs/ADRs.md#adr-006) |
+| Generation LLM | Provider-agnostic via config (`init_chat_model`); no hard-coded default | [ADR-007](docs/ADRs.md#adr-007) |
+| Deployment | Local single-process for the MVP; every component has a credible cloud/managed path | [ADR-009](docs/ADRs.md#adr-009) |
+
+**Rejected, with reasons:** see [ADRs.md](docs/ADRs.md) — hand-rolled control
+flow and LlamaIndex (`ADR-001`), self-hosted embeddings and the larger
+OpenAI embedding model (`ADR-002`), self-hosted rerankers and Voyage AI
+(`ADR-003`), Elasticsearch/OpenSearch and separate FAISS+BM25 stores
+(`ADR-004`), a query-similarity-only cache key (`ADR-005`), an NLI
+entailment model for faithfulness (`ADR-006`), direct vendor SDK calls and
+an LLM proxy (`ADR-007`), ACL post-filtering (`ADR-008`), day-one cloud
+deployment (`ADR-009`).
+
+## Document map
+
+| Doc | Purpose |
+|---|---|
+| [README.md](README.md) | This file — orientation, spine, reading order |
+| [PRD.md](docs/PRD.md) | Why this exists, goals/non-goals, personas, the eval set, success criteria, risks |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | The component diagram, query/ingestion flows, failure modes, scale model |
+| [ADRs.md](docs/ADRs.md) | The contested decisions: alternatives considered, why they lost |
+| [AI-ARCHITECTURE.md](docs/AI-ARCHITECTURE.md) | Where each LLM/ML call earns its place, the deterministic/ML/LLM split, safety posture |
+| [DATA-MODEL.md](docs/DATA-MODEL.md) | Chunk schema, Qdrant collection design, synthetic ACL-tag derivation |
+| [API-CONTRACTS.md](docs/API-CONTRACTS.md) | The full `/query` request/response, abstain contract, retrieval tool schema, errors |
+| [REQUIREMENTS.md](docs/REQUIREMENTS.md) | `FR-x.y`/`NFR-x.y` with acceptance criteria, capacity sizing math |
+| [ROADMAP.md](docs/ROADMAP.md) | The phased build plan (M0–M6) and the 1K→10M scale-stage sequencing |
+
+## Reading order
+
+1. This file
+2. [PRD.md](docs/PRD.md) — the why
+3. [ARCHITECTURE.md](docs/ARCHITECTURE.md) — the how
+4. [ADRs.md](docs/ADRs.md) — why not the alternatives
+5. [AI-ARCHITECTURE.md](docs/AI-ARCHITECTURE.md) — the AI-specific cross-cutting concerns
+6. [DATA-MODEL.md](docs/DATA-MODEL.md) — the schema everything else assumes
+7. [API-CONTRACTS.md](docs/API-CONTRACTS.md) — the testable external contract
+8. [REQUIREMENTS.md](docs/REQUIREMENTS.md) — the testable internal contract
+9. [ROADMAP.md](docs/ROADMAP.md) — the build sequence
+
+## Conventions
+
+- `FR-x.y` functional requirements, `NFR-x.y` non-functional — both in
+  [REQUIREMENTS.md](docs/REQUIREMENTS.md), grouped by area (`FR-1.x` ingestion,
+  `FR-2.x` hybrid retrieval, `FR-3.x` reranking, `FR-4.x` generation/tools,
+  `FR-5.x` faithfulness/abstain, `FR-6.x` caching, `FR-7.x` Phase 2,
+  `FR-8.x` observability/feedback, `FR-9.x` near-real-time ingestion).
+- `UC-1`..`UC-8` — the labeled eval set in
+  [PRD.md §4.2](docs/PRD.md#42-core-use-cases--illustrative-eval-set); every
+  acceptance criterion in REQUIREMENTS.md traces to one.
+- `ADR-00N` — decisions, in [ADRs.md](docs/ADRs.md). Stable once assigned.
+- **Non-negotiable:** nothing returns an answer without going through the
+  faithfulness gate, and the semantic cache never crosses an
+  `acl_signature` boundary (UC-7) — these two are standing regression tests,
+  not one-time checks.
+- Assumptions (numeric targets pinned ahead of real measurement) are marked
+  inline as *Assumption* and listed in each doc's own assumptions section —
+  treat them as debts to retire during the build, not settled facts.
 
 ## Project status
 
 | Area | Status |
-|------|--------|
-| PRD | Draft v1 — [PRD.md](./PRD.md) |
+|---|---|
+| Design docs | Complete — this suite |
 | Implementation | Not started |
-| Corpus | Wikipedia English split via Hugging Face |
-
----
+| Corpus | Wikipedia English split (`20231101.en`) via Hugging Face, not yet ingested |
 
 ## License and attribution
 

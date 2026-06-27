@@ -1,0 +1,170 @@
+# Requirements — Grounded RAG over Wikipedia
+
+`FR-x.y` = functional, `NFR-x.y` = non-functional. Acceptance criteria draw
+on the labeled eval set (`UC-1`..`UC-8`) in
+[PRD.md §4.2](PRD.md#42-core-use-cases--illustrative-eval-set).
+
+## Functional requirements
+
+### FR-1.x — Ingestion (FR1)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-1.1 | Batch-ingest the 1,000-document slice: load, chunk, derive synthetic metadata/ACL, embed dense + sparse, upsert to Qdrant `articles` | P0 | Total chunk count falls in the 5,000–15,000 range (5–15 chunks/doc); querying `articles` directly with a payload filter (e.g. `doc_type=long AND acl_tags contains "public"`) returns only matching chunks — see [DATA-MODEL.md](DATA-MODEL.md) |
+| FR-1.2 | Re-running ingestion upserts rather than duplicates | P0 | Running the ingestion script twice on the same slice leaves the chunk count unchanged ([ARCHITECTURE.md idempotency](ARCHITECTURE.md#cross-cutting)) |
+
+### FR-2.x — Hybrid retrieval & filtering (FR2, FR3)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-2.1 | `retrieve` executes a Qdrant hybrid query (dense + sparse fusion) for a query string | P0 | UC-1: the correct article's chunk appears in the top-k candidate set |
+| FR-2.2 | Metadata/ACL filter (`doc_type`, `date_range`, `acl_tags`) applies inside the hybrid query, before fusion | P0 | UC-3: a chunk outside the filter never appears in the candidate set — verified against retrieval's raw output, not the final answer |
+| FR-2.3 | Hybrid retrieval beats dense-only retrieval on the eval set | P0 | Recall@5 (hybrid) ≥ Recall@5 (dense-only) + 10 points across the eval set (*Assumption: placeholder margin pending the real measurement — see [Open assumptions](#open-assumptions)*) |
+
+### FR-3.x — Reranking (FR4)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-3.1 | `rerank` calls Cohere Rerank API (`rerank-v3.5`) over the candidate set, returns a precise top-k | P0 | UC-2: precision@3 (rerank) ≥ precision@3 (fusion-only) + 15 points on the ambiguous-candidate case (*Assumption — see [Open assumptions](#open-assumptions)*) |
+| FR-3.2 | A Cohere API failure degrades to fusion-only ranking, never a failed request | P0 | Simulated Cohere failure (e.g. invalid key) still returns a `200` with fusion-ranked chunks — [ADR-003](ADRs.md#adr-003) |
+
+### FR-4.x — Grounded generation & tool use (FR5, FR8)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-4.1 | `generate` answers using only the provided top-k context, with inline citations | P0 | UC-1, UC-8: every claim has ≥1 citation; every citation's `chunk_id` is in this response's `retrieved_chunks` |
+| FR-4.2 | `generate` can call the retrieval tool when the first pass is insufficient, with a query derived from the first pass's result | P0 | UC-4: exactly one additional tool call fires, with a refined (not repeated) query |
+| FR-4.3 | The retrieval tool inherits the request's `access_context`/`filters`; the model cannot widen them | P0 | The tool schema doesn't expose `access_context`/`filters` as model-settable parameters — [API-CONTRACTS.md](API-CONTRACTS.md#the-retrieval-tool-fr8) |
+
+### FR-5.x — Faithfulness & abstain (FR6, FR7)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-5.1 | `faithfulness` scores each cited claim against its cited chunk, produces pass/fail + confidence | P0 | UC-8: a well-grounded answer passes with `confidence ≥ 0.7` (*Assumption — threshold pending real measurement*) |
+| FR-5.2 | A faithfulness fail converts the response into an explicit abstention | P0 | UC-5: a genuinely unanswerable query returns `abstained: true`, `answer: null`, `retrieved_chunks` still populated |
+| FR-5.3 | An abstained response is never written to `query_cache` | P0 | Re-submitting UC-5's query+context twice returns `cache_hit: false` both times |
+
+### FR-6.x — ACL-aware semantic caching (FR9)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-6.1 | `cache_lookup` checks `query_cache` filtered by `acl_signature` before running the full pipeline | P0 | UC-6: a second identical/paraphrased query under the same `access_context` returns `cache_hit: true` |
+| FR-6.2 | Cache lookup never crosses an `acl_signature` boundary | P0 | UC-7: the same query text under two different `access_context` values never shares a cache hit — standing regression test from M4 onward |
+| FR-6.3 | `response` writes through to `query_cache` only after a faithfulness pass | P0 | A passing response, repeated with `bypass_cache: false`, returns `cache_hit: true` on the second call |
+
+### FR-7.x — Phase 2: query rewriting & parallel tool calls (FR11, FR12)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-7.1 | Query rewriting decontextualizes/expands/decomposes multi-hop queries before retrieval | P1 | Deferred — acceptance criteria to be defined alongside M5 design ([ROADMAP.md](ROADMAP.md)) |
+| FR-7.2 | Parallel tool/retrieval calls with partial-failure handling — one failure degrades gracefully | P1 | Deferred — acceptance criteria to be defined alongside M5 design |
+
+### FR-8.x — Observability & feedback (FR13, FR14)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-8.1 | Per-request trace spans retrieve/rerank/generate/faithfulness | P1 | Deferred to M6 |
+| FR-8.2 | Feedback ingestion (thumbs up/down) for offline eval | P2 | Deferred, no system requirement yet |
+
+### FR-9.x — Near-real-time ingestion (FR10)
+
+| ID | Requirement | Priority | Acceptance criteria |
+|---|---|---|---|
+| FR-9.1 | Document changes queryable within minutes, via a change-driven pipeline splitting metadata-only updates from expensive re-embeds | P1 | Deferred to Stage 3 of the scale roadmap ([ROADMAP.md](ROADMAP.md#scale-stages)) |
+
+## Non-functional requirements
+
+| ID | Requirement | MVP target | Scale target (10M docs, design exercise) |
+|---|---|---|---|
+| NFR-1 | Retrieval latency | p95 < 500 ms | p99 < 1 s, p50 < 200 ms |
+| NFR-2 | End-to-end latency (cold, includes generation) | < 5 s | Time to first token < 800 ms (streamed) |
+| NFR-3 | Throughput | Low, single-digit QPS | 1,000+ QPS sustained, ~3,000 peak |
+| NFR-4 | Cache hit rate | N/A (low volume) | Planning assumption 40–60% — **unvalidated, top risk** ([PRD.md §12](PRD.md#12-risks-and-open-questions)) |
+| NFR-5 | Availability | Best effort, single node | 99.9% retrieval, 99.5% generation |
+| NFR-6 | Index freshness | Batch; minutes–hours acceptable | < 5 minutes, doc to queryable (FR10) |
+| NFR-7 | Faithfulness rate (non-abstained answers fully supported) | ≥ 98% on the eval set (*Assumption — placeholder pending real measurement*) | Same bar; doesn't relax with scale |
+| NFR-8 | Abstention correctness on deliberately unanswerable queries (UC-5 class) | 100% — zero fabricated answers tolerated | Same bar |
+| NFR-9 | Citation validity | 100% — every citation resolves to a retrieved chunk | Same bar; enforced structurally per [API-CONTRACTS.md](API-CONTRACTS.md#response--grounded) |
+
+## Capacity sizing
+
+Showing the math behind the scale-target row in [PRD.md
+§6.2](PRD.md#62-scale-targets-10m-documents-roadmap--design-exercise-not-a-build-target),
+using the actual pinned embedding model (OpenAI `text-embedding-3-small`,
+1536 dims, [ADR-002](ADRs.md#adr-002)) rather than a generic placeholder.
+
+### Storage at 10M documents (50M–150M chunks, 5–15 chunks/doc)
+
+| Component | Per chunk | At 50M chunks (low) | At 100M chunks (mid) | At 150M chunks (high) |
+|---|---|---|---|---|
+| Dense vector, raw float32 | 1536 × 4 B = 6,144 B | ~307 GB | ~614 GB | ~922 GB |
+| Dense vector, int8 quantized (~4x) | ~1,536 B | ~77 GB | ~154 GB | ~230 GB |
+| Sparse vector (rough estimate, ~100 nonzero terms × 8 B) | ~800 B | ~40 GB | ~80 GB | ~120 GB |
+| Payload — chunk text + metadata (~2.2 KB/chunk) | ~2,200 B | ~110 GB | ~220 GB | ~330 GB |
+| **Total (quantized dense + sparse + payload)** | — | **~227 GB** | **~454 GB** | **~680 GB** |
+
+*Assumption: sparse-vector and payload-text sizes are rough estimates pending
+real corpus statistics from M0 — the actual figures depend on vocabulary
+overlap and average chunk length, which aren't known until the real slice is
+chunked.*
+
+**The non-obvious result:** at this scale, **chunk text payload is the
+single largest storage component** — larger than the quantized dense
+vectors. A future optimization (not built, not needed at MVP scale) would
+store chunk text in cheaper blob storage keyed by `chunk_id`, fetching it
+only for the final top-k rather than keeping all 50–150M chunks' full text
+resident in Qdrant's payload. Flagged here as a real implication of the
+math, not a roadmap commitment.
+
+With a replication factor of 2 (for the 99.9% availability target), double
+the total above — roughly **450 GB to 1.4 TB**, comfortably shardable across
+"a handful of nodes" per [PRD.md §10](PRD.md#10-roadmap-from-1k-to-10m).
+
+### LLM call volume at 1,000+ QPS sustained
+
+This is the number behind "cache hit rate is the single biggest lever"
+([ARCHITECTURE.md §Scale](ARCHITECTURE.md#scale--capacity-model)), made
+concrete:
+
+- At the 40–60% planning assumption (`NFR-4`), 400–600 of every 1,000 QPS
+  are cache hits (cheap: one embedding call + one Qdrant point lookup, **no
+  LLM call**).
+- The remaining 400–600 QPS run the full pipeline: one embedding call, one
+  Qdrant hybrid query, one Cohere rerank call, and **at least two** LLM
+  calls (`generate`, `faithfulness`) — three if a tool call fires.
+- Sustained LLM call volume: **roughly 800–1,200 calls/sec** at 1,000 QPS
+  sustained, **2,400–3,600 calls/sec** at the 3,000 QPS peak target.
+- Every 10-percentage-point drop in cache hit rate adds ~100 QPS of
+  full-pipeline load — ~200 additional LLM calls/sec. This is a real,
+  currently-unbudgeted cost line at scale, not just a latency concern.
+
+## P0 summary — the MVP
+
+Every `FR-1.x` through `FR-6.x` requirement above is P0. `FR-7.x` (query
+rewriting, parallel tool calls), `FR-8.x` (observability, feedback), and
+`FR-9.x` (near-real-time ingestion) are P1/P2 — designed for, not built, in
+the MVP. There is no P2 functional gap inside the MVP itself: M0–M4 in
+[ROADMAP.md](ROADMAP.md) cover every P0 item end to end.
+
+## Open assumptions
+
+Numeric targets pinned here to keep the suite specific (per house
+convention: no adjectival NFRs), flagged as placeholders to retire once
+real measurement exists:
+
+- **FR-2.3, FR-3.1 margins (10 and 15 points):** no real eval run has
+  happened yet — these are directionally-reasonable starting bars, not
+  measured results. Retire once M1/M2 produce real recall/precision
+  numbers.
+- **FR-5.1 confidence threshold (0.7):** an arbitrary starting cut for
+  "passes faithfulness" — tune once the LLM-as-judge's actual score
+  distribution is observed in M3.
+- **NFR-7 faithfulness rate (98%):** a placeholder quality bar; the real
+  target should be set from the eval set's actual measured ceiling, not
+  assumed in advance.
+- **Cache-hit similarity threshold (cosine ≥ 0.92, [DATA-MODEL.md](DATA-MODEL.md)):**
+  picked without real paraphrase data; tune against observed false-hit rate
+  once M4 is built.
+- **Capacity sizing's sparse-vector and payload-text estimates:** rough
+  approximations pending real chunk statistics from M0 (see
+  [Capacity sizing](#capacity-sizing) above).

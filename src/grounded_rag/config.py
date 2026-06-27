@@ -57,9 +57,9 @@ ACL_GROUPS = ["eng", "finance", "legal"]
 
 @dataclass(frozen=True)
 class Settings:
-    openai_api_key: str | None = field(default_factory=lambda: os.environ.get("OPENAI_API_KEY"))
+    openai_api_key: str | None = field(default_factory=lambda: os.environ.get("OPENAI_API_KEY") or None)
     qdrant_url: str = field(default_factory=lambda: os.environ.get("QDRANT_URL", "http://localhost:6333"))
-    qdrant_api_key: str | None = field(default_factory=lambda: os.environ.get("QDRANT_API_KEY"))
+    qdrant_api_key: str | None = field(default_factory=lambda: os.environ.get("QDRANT_API_KEY") or None)
 
 
 def get_settings() -> Settings:

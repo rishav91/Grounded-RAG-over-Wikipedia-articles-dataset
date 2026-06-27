@@ -106,8 +106,8 @@ deployment (`ADR-009`).
 | Area | Status |
 |---|---|
 | Design docs | Complete — this suite |
-| Implementation | Not started |
-| Corpus | Wikipedia English split (`20231101.en`) via Hugging Face, not yet ingested |
+| Implementation | M0 (ingestion/indexing) done — see [ROADMAP.md](docs/ROADMAP.md); M1 onward not started |
+| Corpus | Wikipedia English split (`20231101.en`), 1,000-doc MVP slice ingested — 11,768 chunks in Qdrant's `articles` collection |
 
 ## License and attribution
 

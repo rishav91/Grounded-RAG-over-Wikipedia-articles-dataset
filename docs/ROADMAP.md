@@ -7,15 +7,17 @@ detail and the sequencing rationale.
 
 ## M0 — Ingestion and indexing (write path)
 
+- [x] **M0 status: done** — merged to `main`, verified (`scripts/verify_m0.py`)
+
 **Goal:** the walking skeleton — a queryable, ACL-filterable corpus, before
 any read-path graph exists.
 
 **Ships:**
-- Streaming loader for the deterministic 1,000-document slice (`wikimedia/wikipedia`, `20231101.en`)
-- Chunker (sentence-aware, ~500 tokens / 50 overlap — [DATA-MODEL.md](DATA-MODEL.md))
-- Synthetic `doc_type`, `acl_tags`, `created_at`/`updated_at` derivation (FR1.1)
-- Dense embedding (OpenAI `text-embedding-3-small`) + sparse vectorization (`fastembed`/`Qdrant/bm25`) per chunk
-- Upsert into Qdrant `articles` collection, with payload indexes on the filterable fields
+- [x] Streaming loader for the deterministic 1,000-document slice (`wikimedia/wikipedia`, `20231101.en`)
+- [x] Chunker (sentence-aware, ~500 tokens / 50 overlap — [DATA-MODEL.md](DATA-MODEL.md))
+- [x] Synthetic `doc_type`, `acl_tags`, `created_at`/`updated_at` derivation (FR1.1)
+- [x] Dense embedding (OpenAI `text-embedding-3-small`) + sparse vectorization (`fastembed`/`Qdrant/bm25`) per chunk
+- [x] Upsert into Qdrant `articles` collection, with payload indexes on the filterable fields
 
 **Unlocks:** every later phase depends on this corpus existing and being
 filterable; nothing downstream can be tested without it.
@@ -28,13 +30,15 @@ actually work, before any retrieval ranking or LLM is involved.
 
 ## M1 — Hybrid retrieval plus filtering (FR2, FR3)
 
+- [x] **M1 status: done** — merged to `main`, verified (`scripts/eval_m1.py`: UC-3 6/6 pass; UC-1 recall@5 hybrid=dense-only=100%, delta below the placeholder +10-point margin — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions))
+
 **Goal:** prove the single-engine hybrid query (`ADR-004`) and the ACL
 pre-filter on real queries, before adding rerank or generation on top.
 
 **Ships:**
-- `retrieve` node: Qdrant hybrid query (dense + sparse fusion) with the metadata/ACL payload filter applied before fusion
-- Eval harness (`scripts/eval_m1.py`): runs the eval set's UC-1/UC-3 cases against the real corpus, computing Recall@k (hybrid vs. dense-only) and checking the ACL filter against the raw candidate set — the infrastructure this milestone's own exit criteria depend on, not just the `retrieve` node itself
-- The eval set's UC-1/UC-3 cases run against the real corpus for the first time
+- [x] `retrieve` node: Qdrant hybrid query (dense + sparse fusion) with the metadata/ACL payload filter applied before fusion
+- [x] Eval harness (`scripts/eval_m1.py`): runs the eval set's UC-1/UC-3 cases against the real corpus, computing Recall@k (hybrid vs. dense-only) and checking the ACL filter against the raw candidate set — the infrastructure this milestone's own exit criteria depend on, not just the `retrieve` node itself
+- [x] The eval set's UC-1/UC-3 cases run against the real corpus for the first time
 
 **Unlocks:** validates that `ADR-004`'s single-engine bet (Qdrant native
 hybrid, instead of two synced stores) actually produces a sane fused
@@ -47,12 +51,14 @@ comparison (hybrid vs. dense-only) is measured for the first time.
 
 ## M2 — Reranking (FR4)
 
+- [ ] **M2 status: not started**
+
 **Goal:** add Cohere reranking over M1's candidate set, and measure whether
 it earns its cost (`ADR-003`).
 
 **Ships:**
-- `rerank` node: Cohere Rerank API call over the fused candidate set, returning a precise top-k
-- Fallback path: a Cohere failure degrades to fusion-only ranking (FR-3.2)
+- [ ] `rerank` node: Cohere Rerank API call over the fused candidate set, returning a precise top-k
+- [ ] Fallback path: a Cohere failure degrades to fusion-only ranking (FR-3.2)
 
 **Unlocks:** the precision improvement FR4 exists to demonstrate, and the
 first real signal on whether `ADR-003`'s reranker choice (hosted API vs.
@@ -65,15 +71,17 @@ fusion-ranked response.
 
 ## M3 — Grounded generation, citations, faithfulness, abstain, tool use (FR5, FR6, FR7, FR8)
 
+- [ ] **M3 status: not started**
+
 **Goal:** the centerpiece milestone — wires the LangGraph read path
 end-to-end and proves the governing principle (verifiable-or-abstain) holds
 on real queries.
 
 **Ships:**
-- `generate` node: citation-constrained answer generation from the top-k, via the provider-agnostic LLM (`ADR-007`)
-- The retrieval tool (FR8), bound to `generate`, inheriting the original request's `access_context`/filters (FR-4.3)
-- `faithfulness` node: LLM-as-judge scoring (`ADR-006`), gating the abstain decision
-- `response` node: the full structured API response shape ([API-CONTRACTS.md](API-CONTRACTS.md))
+- [ ] `generate` node: citation-constrained answer generation from the top-k, via the provider-agnostic LLM (`ADR-007`)
+- [ ] The retrieval tool (FR8), bound to `generate`, inheriting the original request's `access_context`/filters (FR-4.3)
+- [ ] `faithfulness` node: LLM-as-judge scoring (`ADR-006`), gating the abstain decision
+- [ ] `response` node: the full structured API response shape ([API-CONTRACTS.md](API-CONTRACTS.md))
 
 **Unlocks:** the first end-to-end answer the project produces. Also the
 first real test of `ADR-001`'s LangGraph bet — the retrieval-tool loop is
@@ -87,13 +95,15 @@ answer — this is the milestone where the project's central claim
 
 ## M4 — Semantic caching, ACL-aware (FR9)
 
+- [ ] **M4 status: not started**
+
 **Goal:** add the cache, and prove the one property that can never regress:
 no answer crosses an access boundary.
 
 **Ships:**
-- `cache_lookup` node and the `query_cache` Qdrant collection ([DATA-MODEL.md](DATA-MODEL.md))
-- Write-through from `response`, gated on a faithfulness pass (FR-6.3) — an abstained answer is never cached (FR-5.3)
-- `cache_hit` field surfaced in the API response ([API-CONTRACTS.md](API-CONTRACTS.md))
+- [ ] `cache_lookup` node and the `query_cache` Qdrant collection ([DATA-MODEL.md](DATA-MODEL.md))
+- [ ] Write-through from `response`, gated on a faithfulness pass (FR-6.3) — an abstained answer is never cached (FR-5.3)
+- [ ] `cache_hit` field surfaced in the API response ([API-CONTRACTS.md](API-CONTRACTS.md))
 
 **Unlocks:** the cache hit rate measurement that everything in
 [PRD.md §12](PRD.md#12-risks-and-open-questions) and
@@ -108,14 +118,16 @@ later change to caching, retrieval, or the API contract.
 
 ## M5 — Phase 2 techniques (FR11, FR12)
 
+- [ ] **M5 status: not started**
+
 **Goal:** the two deferred techniques, added once the MVP's core loop
 (M0–M4) is proven stable — deliberately last among the "designed for"
 items because both extend the `generate` node's control flow, which is
 easiest to get wrong if the simpler path beneath it isn't already trusted.
 
 **Ships:**
-- Query rewriting (FR11): decontextualize/expand/decompose before retrieval
-- Parallel tool calls with partial-failure handling (FR12)
+- [ ] Query rewriting (FR11): decontextualize/expand/decompose before retrieval
+- [ ] Parallel tool calls with partial-failure handling (FR12)
 
 **Unlocks:** nothing inside the MVP depends on this — it's explicitly
 designed-for/sequenced-in rather than required for the MVP to be considered
@@ -127,12 +139,14 @@ them now would invent detail this suite doesn't have yet.
 
 ## M6 — Observability and feedback (FR13, FR14)
 
+- [ ] **M6 status: not started**
+
 **Goal:** per-request traceability and an offline-eval feedback loop, added
 last because nothing else's correctness depends on it.
 
 **Ships:**
-- Per-request trace spanning retrieve/rerank/generate/faithfulness (FR13)
-- Feedback ingestion, thumbs up/down (FR14)
+- [ ] Per-request trace spanning retrieve/rerank/generate/faithfulness (FR13)
+- [ ] Feedback ingestion, thumbs up/down (FR14)
 
 **Unlocks:** nothing further — this is the last MVP-adjacent milestone.
 

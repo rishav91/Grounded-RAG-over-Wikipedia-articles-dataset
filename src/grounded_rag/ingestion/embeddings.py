@@ -39,3 +39,14 @@ class SparseEmbedder:
     def embed(self, texts: list[str]) -> Iterator[SparseVector]:
         for embedding in self._model.embed(texts):
             yield SparseVector(indices=embedding.indices.tolist(), values=embedding.values.tolist())
+
+    def query_embed(self, texts: list[str]) -> Iterator[SparseVector]:
+        """Query-time sparse embedding.
+
+        fastembed's Bm25.embed() and .query_embed() are not interchangeable:
+        embed() produces document-mode TF-saturation weights, query_embed()
+        produces query-mode weights. Retrieval must use this method, not
+        embed(), for the query text.
+        """
+        for embedding in self._model.query_embed(texts):
+            yield SparseVector(indices=embedding.indices.tolist(), values=embedding.values.tolist())

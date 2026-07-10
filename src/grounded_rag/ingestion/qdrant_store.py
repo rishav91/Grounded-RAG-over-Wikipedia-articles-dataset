@@ -10,6 +10,7 @@ from __future__ import annotations
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
+    Modifier,
     PayloadSchemaType,
     PointStruct,
     SparseVector,
@@ -41,7 +42,9 @@ def ensure_collection(client: QdrantClient, collection_name: str = ARTICLES_COLL
         client.create_collection(
             collection_name=collection_name,
             vectors_config={DENSE_VECTOR_NAME: VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE)},
-            sparse_vectors_config={SPARSE_VECTOR_NAME: SparseVectorParams()},
+            # Qdrant/bm25 requires the IDF modifier to actually score as BM25 —
+            # without it, Qdrant only applies the TF-saturation term.
+            sparse_vectors_config={SPARSE_VECTOR_NAME: SparseVectorParams(modifier=Modifier.IDF)},
         )
 
     existing_indexes = client.get_collection(collection_name).payload_schema

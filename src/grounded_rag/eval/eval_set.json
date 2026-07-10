@@ -19,6 +19,29 @@
       "expected_doc_id": "2103"
     }
   ],
+  "uc2_cases": [
+    {
+      "id": "uc2-apollo-11-first-landing",
+      "query": "Which Apollo mission was the first to land astronauts on the Moon?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "662",
+      "competing_doc_ids": ["663", "1770", "1967"]
+    },
+    {
+      "id": "uc2-andrew-johnson-impeachment",
+      "query": "Which U.S. President was impeached by the House of Representatives in 1868?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "1624",
+      "competing_doc_ids": ["1623"]
+    },
+    {
+      "id": "uc2-apollo-13-abort",
+      "query": "Which Apollo mission suffered an in-flight explosion and had to abort its Moon landing?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "1770",
+      "competing_doc_ids": ["662", "1967"]
+    }
+  ],
   "uc3_cases": [
     {
       "id": "uc3-algol-excluded",

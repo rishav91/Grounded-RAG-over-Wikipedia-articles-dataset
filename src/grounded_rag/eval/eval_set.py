@@ -1,4 +1,4 @@
-"""Loader for the M1 eval set — PRD.md's UC-1/UC-3 cases, grounded in real
+"""Loader for the eval set — PRD.md's UC-1/UC-2/UC-3 cases, grounded in real
 doc_ids from the ingested corpus (not placeholders)."""
 
 from __future__ import annotations
@@ -19,6 +19,19 @@ class UC1Case:
 
 
 @dataclass(frozen=True)
+class UC2Case:
+    """UC-2: ambiguous-candidate query — several similarly-titled docs compete for top-k,
+    but only expected_doc_id genuinely answers the query. Reranking should promote its
+    chunks over the competing_doc_ids' chunks; measured as precision@k, not by inspection."""
+
+    id: str
+    query: str
+    access_context_groups: list[str]
+    expected_doc_id: str
+    competing_doc_ids: list[str]
+
+
+@dataclass(frozen=True)
 class UC3Case:
     """UC-3: ACL/metadata filter — the restricted doc must (not) appear in the candidate set."""
 
@@ -32,6 +45,7 @@ class UC3Case:
 @dataclass(frozen=True)
 class EvalSet:
     uc1_cases: list[UC1Case]
+    uc2_cases: list[UC2Case]
     uc3_cases: list[UC3Case]
 
 
@@ -39,5 +53,6 @@ def load_eval_set() -> EvalSet:
     raw = json.loads(resources.files("grounded_rag.eval").joinpath("eval_set.json").read_text())
     return EvalSet(
         uc1_cases=[UC1Case(**case) for case in raw["uc1_cases"]],
+        uc2_cases=[UC2Case(**case) for case in raw["uc2_cases"]],
         uc3_cases=[UC3Case(**case) for case in raw["uc3_cases"]],
     )

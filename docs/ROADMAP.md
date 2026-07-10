@@ -51,14 +51,14 @@ comparison (hybrid vs. dense-only) is measured for the first time.
 
 ## M2 — Reranking (FR4)
 
-- [ ] **M2 status: not started**
+- [x] **M2 status: done** — merged to `main`, verified (`scripts/eval_m2.py`: FR-3.2 fallback PASS; UC-2 precision@3 rerank=77.8% vs. fusion-only=66.7%, delta +11.1 points, below the placeholder +15-point margin — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions))
 
 **Goal:** add Cohere reranking over M1's candidate set, and measure whether
 it earns its cost (`ADR-003`).
 
 **Ships:**
-- [ ] `rerank` node: Cohere Rerank API call over the fused candidate set, returning a precise top-k
-- [ ] Fallback path: a Cohere failure degrades to fusion-only ranking (FR-3.2)
+- [x] `rerank` node: Cohere Rerank API call over the fused candidate set, returning a precise top-k
+- [x] Fallback path: a Cohere failure degrades to fusion-only ranking (FR-3.2)
 
 **Unlocks:** the precision improvement FR4 exists to demonstrate, and the
 first real signal on whether `ADR-003`'s reranker choice (hosted API vs.

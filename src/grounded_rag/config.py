@@ -59,6 +59,13 @@ ACL_GROUPS = ["eng", "finance", "legal"]
 # M1's recall@k measurement and M2's rerank input size.
 RETRIEVE_CANDIDATE_K = 30
 
+# ADR-003: pinned Cohere rerank model.
+RERANK_MODEL = "rerank-v3.5"
+
+# API-CONTRACTS.md `options.top_k` default: final chunk count passed to
+# generation after rerank.
+RERANK_TOP_K = 5
+
 
 @dataclass(frozen=True)
 class Settings:

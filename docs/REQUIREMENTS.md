@@ -152,10 +152,18 @@ Numeric targets pinned here to keep the suite specific (per house
 convention: no adjectival NFRs), flagged as placeholders to retire once
 real measurement exists:
 
-- **FR-2.3, FR-3.1 margins (10 and 15 points):** no real eval run has
-  happened yet — these are directionally-reasonable starting bars, not
-  measured results. Retire once M1/M2 produce real recall/precision
-  numbers.
+- **FR-2.3, FR-3.1 margins (10 and 15 points):** retired by real measurement.
+  M1 (`scripts/eval_m1.py`): UC-1 recall@5, hybrid vs. dense-only, delta =
+  0.0 points — below the +10-point margin (saturates at 1K-doc scale on
+  distinctive named-entity queries). M2 (`scripts/eval_m2.py`): UC-2
+  precision@3, rerank vs. fusion-only, delta = +11.1 points — below the
+  +15-point margin but directionally positive, and one case (Apollo 13)
+  showed a genuine +33-point gain, confirming rerank helps when the fused
+  candidate set actually contains the right chunks in the wrong order; it
+  cannot fix cases where the correct doc never entered the top-30 (that's
+  `retrieve`'s job, not `rerank`'s). Neither number was massaged to hit the
+  original placeholder — see [ROADMAP.md](ROADMAP.md#m1--hybrid-retrieval-plus-filtering-fr2-fr3)
+  and [ROADMAP.md](ROADMAP.md#m2--reranking-fr4).
 - **FR-5.1 confidence threshold (0.7):** an arbitrary starting cut for
   "passes faithfulness" — tune once the LLM-as-judge's actual score
   distribution is observed in M3.

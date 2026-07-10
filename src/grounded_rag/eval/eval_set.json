@@ -1,0 +1,66 @@
+{
+  "uc1_cases": [
+    {
+      "id": "uc1-adam-smith",
+      "query": "What is Adam Smith known for?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "1814"
+    },
+    {
+      "id": "uc1-azerbaijan",
+      "query": "Where is Azerbaijan located?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "746"
+    },
+    {
+      "id": "uc1-atlanta-falcons",
+      "query": "What sport do the Atlanta Falcons play?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "2103"
+    }
+  ],
+  "uc3_cases": [
+    {
+      "id": "uc3-algol-excluded",
+      "query": "What programming language paradigm does Algol use?",
+      "access_context_groups": ["public"],
+      "restricted_doc_id": "1394",
+      "expect_excluded": true
+    },
+    {
+      "id": "uc3-algol-included",
+      "query": "What programming language paradigm does Algol use?",
+      "access_context_groups": ["public", "eng"],
+      "restricted_doc_id": "1394",
+      "expect_excluded": false
+    },
+    {
+      "id": "uc3-almond-excluded",
+      "query": "What nutrients does an almond contain?",
+      "access_context_groups": ["public"],
+      "restricted_doc_id": "1064",
+      "expect_excluded": true
+    },
+    {
+      "id": "uc3-almond-included",
+      "query": "What nutrients does an almond contain?",
+      "access_context_groups": ["public", "legal"],
+      "restricted_doc_id": "1064",
+      "expect_excluded": false
+    },
+    {
+      "id": "uc3-asl-excluded",
+      "query": "How is American Sign Language structured grammatically?",
+      "access_context_groups": ["public"],
+      "restricted_doc_id": "1201",
+      "expect_excluded": true
+    },
+    {
+      "id": "uc3-asl-included",
+      "query": "How is American Sign Language structured grammatically?",
+      "access_context_groups": ["public", "finance"],
+      "restricted_doc_id": "1201",
+      "expect_excluded": false
+    }
+  ]
+}

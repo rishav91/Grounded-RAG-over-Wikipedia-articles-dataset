@@ -54,12 +54,18 @@ DOC_TYPE_MEDIUM_MAX_CHARS = 8000
 # DATA-MODEL.md §ACL tag derivation: closed set of four synthetic groups.
 ACL_GROUPS = ["eng", "finance", "legal"]
 
+# ADR-003: pinned candidate-set size for the fusion-stage retrieve query,
+# within ADR-003's qualitative "~20-50 chunks per query" range. Feeds both
+# M1's recall@k measurement and M2's rerank input size.
+RETRIEVE_CANDIDATE_K = 30
+
 
 @dataclass(frozen=True)
 class Settings:
     openai_api_key: str | None = field(default_factory=lambda: os.environ.get("OPENAI_API_KEY") or None)
     qdrant_url: str = field(default_factory=lambda: os.environ.get("QDRANT_URL", "http://localhost:6333"))
     qdrant_api_key: str | None = field(default_factory=lambda: os.environ.get("QDRANT_API_KEY") or None)
+    cohere_api_key: str | None = field(default_factory=lambda: os.environ.get("COHERE_API_KEY") or None)
 
 
 def get_settings() -> Settings:

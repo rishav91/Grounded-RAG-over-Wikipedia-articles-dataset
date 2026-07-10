@@ -86,7 +86,7 @@ flowchart TB
 | Qdrant `articles` collection | Dense + sparse vector per chunk; payload carries `doc_type`/`acl_tags`/dates; one hybrid query does fusion + payload filter | Qdrant | FR2, FR3; [ADR-004](ADRs.md#adr-004), [ADR-008](ADRs.md#adr-008) |
 | Qdrant `query_cache` collection | Semantic cache: query embedding → cached answer + citations; payload carries `acl_signature` and a write timestamp for TTL | Qdrant, second collection | FR9; [ADR-005](ADRs.md#adr-005) |
 | `cache_lookup` node | Embeds the incoming query, searches `query_cache` filtered by `acl_signature`, returns hit/miss | LangGraph node | FR9 |
-| `retrieve` node | Hybrid query against `articles`, filtered by ACL/metadata before fusion | LangGraph node | FR2, FR3 |
+| `retrieve` node | Hybrid query against `articles`, filtered by ACL/metadata before fusion | Plain Python function through M1/M2 (`src/grounded_rag/retrieval/retrieve.py`); wrapped as a LangGraph node at M3, when the retrieval-tool cycle first needs the graph | FR2, FR3 |
 | Retrieval tool | The same hybrid+filter query as `retrieve`, exposed as a typed LangGraph tool the `generate` node can call mid-turn | LangGraph tool | FR8 |
 | `rerank` node | Calls the Cohere Rerank API over the fused candidate set | LangGraph node + Cohere API | FR4; [ADR-003](ADRs.md#adr-003) |
 | `generate` node | Calls the configured LLM with the top-k context, a citation-constrained prompt, and the retrieval tool bound | LangGraph node + configured LLM | FR5, FR8; [ADR-001](ADRs.md#adr-001), [ADR-007](ADRs.md#adr-007) |

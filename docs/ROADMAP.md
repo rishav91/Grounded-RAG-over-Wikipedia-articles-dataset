@@ -33,6 +33,7 @@ pre-filter on real queries, before adding rerank or generation on top.
 
 **Ships:**
 - `retrieve` node: Qdrant hybrid query (dense + sparse fusion) with the metadata/ACL payload filter applied before fusion
+- Eval harness (`scripts/eval_m1.py`): runs the eval set's UC-1/UC-3 cases against the real corpus, computing Recall@k (hybrid vs. dense-only) and checking the ACL filter against the raw candidate set — the infrastructure this milestone's own exit criteria depend on, not just the `retrieve` node itself
 - The eval set's UC-1/UC-3 cases run against the real corpus for the first time
 
 **Unlocks:** validates that `ADR-004`'s single-engine bet (Qdrant native

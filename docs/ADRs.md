@@ -136,6 +136,10 @@ cross-encoder.
   real budget line, not a rounding error; the self-hosted alternative above
   is the documented escape hatch if that math stops working.
 
+**Addendum (M1):** the qualitative "~20-50 chunks per query" candidate-set
+range above is pinned to `RETRIEVE_CANDIDATE_K = 30` in `config.py` — the
+size `retrieve` returns and `rerank` will consume.
+
 ---
 
 <a id="adr-004"></a>
@@ -178,6 +182,10 @@ and a sparse vector per chunk, queried via Qdrant's native hybrid query API
 - `−` Locks ACL/metadata pre-filtering (FR3) to Qdrant's payload-filtering
   semantics; [DATA-MODEL.md](DATA-MODEL.md) is written against those
   semantics specifically.
+
+**Addendum (M1):** fusion is pinned to **RRF** (`Fusion.RRF`), not DBSF —
+Qdrant's Query API requires an explicit choice and RRF is the standard,
+well-documented default for combining dense + sparse legs.
 
 ---
 

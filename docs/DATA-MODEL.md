@@ -66,7 +66,7 @@ One point per chunk.
 | `payload.acl_tags` | keyword[], indexed | Derived synthetic group(s) — see [ACL tag derivation](#acl-tag-derivation) |
 | `payload.created_at` / `payload.updated_at` | datetime, indexed | Synthesized — see below |
 
-`doc_type`, `acl_tags`, `created_at`, `updated_at` are payload-indexed so
+`doc_id`, `doc_type`, `acl_tags`, `created_at`, `updated_at` are payload-indexed so
 Qdrant's filter can apply them before fusion, per
 [ADR-008](ADRs.md#adr-008).
 
@@ -173,5 +173,5 @@ lifecycle in [ADR-009](ADRs.md#adr-009).
 |---|---|---|
 | Shards | Single shard (Qdrant default) | Stage 3: sharded across nodes, per [PRD.md §10](PRD.md#10-roadmap-from-1k-to-10m) |
 | Quantization | None — full float32 dense vectors | Stage 2: int8 quantization (~4x size reduction), recall loss recovered by Cohere rerank downstream |
-| Payload indexes | `doc_type`, `acl_tags`, `created_at`, `updated_at` indexed for filter performance | Same fields, same indexes — payload indexing strategy doesn't change with scale |
+| Payload indexes | `doc_id`, `doc_type`, `acl_tags`, `created_at`, `updated_at` indexed for filter performance | Same fields, same indexes — payload indexing strategy doesn't change with scale |
 | `query_cache` growth | Unbounded for the MVP — no TTL/expiry mechanism is built; acceptable at MVP traffic volume | A pruning job (delete points past a `created_at` threshold) becomes necessary once cache volume is large enough to matter; not designed yet — flagged here as a known gap, not solved |

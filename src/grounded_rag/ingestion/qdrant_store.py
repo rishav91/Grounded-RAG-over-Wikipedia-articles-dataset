@@ -29,7 +29,7 @@ from grounded_rag.config import (
 from grounded_rag.ingestion.embeddings import SparseVector as LocalSparseVector
 from grounded_rag.ingestion.records import ChunkRecord
 
-_INDEXED_KEYWORD_FIELDS = ("doc_type", "acl_tags")
+_INDEXED_KEYWORD_FIELDS = ("doc_id", "doc_type", "acl_tags")
 _INDEXED_DATETIME_FIELDS = ("created_at", "updated_at")
 
 

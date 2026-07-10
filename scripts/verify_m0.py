@@ -7,6 +7,10 @@ Queries the `articles` collection directly with a payload filter
   2. every point the filtered query returns actually matches the filter
   3. the filter is non-trivial — it excludes at least one point that exists
      in the unfiltered collection (otherwise the "filter" proves nothing)
+  4. a sample of points actually carry a full-length dense vector and a
+     non-empty sparse vector — PRD.md's M0 exit criterion is that every
+     document is "searchable via both the dense and sparse representation",
+     which the payload-only checks above don't verify
 
 This is a black-box check against whatever the ingestion script already
 wrote to Qdrant — it does not re-run ingestion.
@@ -16,11 +20,12 @@ from __future__ import annotations
 
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-from grounded_rag.config import ARTICLES_COLLECTION, get_settings
+from grounded_rag.config import ARTICLES_COLLECTION, DENSE_VECTOR_NAME, EMBEDDING_DIM, SPARSE_VECTOR_NAME, get_settings
 from grounded_rag.ingestion.qdrant_store import get_client
 
 CHUNK_COUNT_MIN = 5_000
 CHUNK_COUNT_MAX = 15_000
+VECTOR_SAMPLE_SIZE = 20
 
 
 def main() -> None:
@@ -49,7 +54,18 @@ def main() -> None:
     non_trivial = 0 < filtered_count < total
     print(f"  [{'PASS' if non_trivial else 'FAIL'}] filter is non-trivial ({filtered_count} of {total} match)")
 
-    if not (in_range and all_match and non_trivial):
+    vector_sample, _ = client.scroll(ARTICLES_COLLECTION, limit=VECTOR_SAMPLE_SIZE, with_vectors=True)
+    vectors_ok = all(
+        len(point.vector.get(DENSE_VECTOR_NAME, [])) == EMBEDDING_DIM
+        and len(point.vector.get(SPARSE_VECTOR_NAME).indices) > 0
+        for point in vector_sample
+    )
+    print(
+        f"  [{'PASS' if vectors_ok else 'FAIL'}] sampled points carry a "
+        f"{EMBEDDING_DIM}-dim dense vector and a non-empty sparse vector ({len(vector_sample)} sampled)"
+    )
+
+    if not (in_range and all_match and non_trivial and vectors_ok):
         raise SystemExit(1)
     print("M0 verification passed.")
 

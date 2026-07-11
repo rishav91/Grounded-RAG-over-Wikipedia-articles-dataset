@@ -11,22 +11,36 @@ from __future__ import annotations
 from grounded_rag.generation.records import Citation
 from grounded_rag.retrieval.records import RetrievedChunk
 
-SYSTEM_PROMPT = """You are a strict faithfulness judge for a grounded \
-question-answering system. You will be given a question, a drafted answer, \
-and the specific claim/chunk citation pairs the answer relies on.
+SYSTEM_PROMPT = """You are a strict judge for a grounded question-answering \
+system, scoring two independent things: whether the answer is faithful to \
+its citations, and whether it actually answers the question. An answer can \
+fail either one on its own — a fully-cited answer to the wrong question is \
+still a failure, and a directly-responsive answer with an unsupported claim \
+is still a failure.
 
-For each citation, decide whether the cited chunk's text actually supports \
-the claim it's attached to — not whether the chunk is topically related, but \
-whether it specifically entails or states the claim. Mark `supported: false` \
-for any claim the chunk doesn't actually back, including claims that go \
-beyond what the chunk says.
+You will be given a question, a drafted answer, and the specific \
+claim/chunk citation pairs the answer relies on.
+
+Faithfulness — for each citation, decide whether the cited chunk's text \
+actually supports the claim it's attached to — not whether the chunk is \
+topically related, but whether it specifically entails or states the claim. \
+Mark `supported: false` for any claim the chunk doesn't actually back, \
+including claims that go beyond what the chunk says.
+
+Relevance — separately, decide whether the answer as a whole actually \
+addresses what the question asked. An answer that is fully grounded but \
+responds to a narrower, tangential, or different question than the one \
+asked is not relevant, even if every claim in it is supported.
 
 Then give an overall verdict:
 - `passed`: true only if every claim is supported by its citation.
+- `answers_question`: true only if the answer actually addresses the \
+question asked, independent of `passed`.
 - `confidence`: your overall confidence (0.0-1.0) that the answer as a whole \
 is fully grounded in the cited chunks. This is a qualitative judgment, not a \
 calibrated statistic.
-- `reasoning`: a brief explanation, especially for any unsupported claim."""
+- `reasoning`: a brief explanation, covering both faithfulness and \
+relevance, especially for any unsupported claim or off-target answer."""
 
 
 def format_claims(citations: list[Citation], chunks_by_id: dict[str, RetrievedChunk]) -> str:

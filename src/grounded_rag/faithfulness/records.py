@@ -15,7 +15,10 @@ class ClaimCheck:
 
 @dataclass(frozen=True)
 class FaithfulnessResult:
-    passed: bool  # judge's verdict AND confidence >= FAITHFULNESS_CONFIDENCE_THRESHOLD (FR-5.1)
+    # passed: judge's groundedness verdict AND answers_question AND
+    # confidence >= FAITHFULNESS_CONFIDENCE_THRESHOLD (FR-5.1, FR-5.4)
+    passed: bool
     confidence: float
     reasoning: str
+    answers_question: bool = False  # FR-5.4: does the answer actually address the question, not just cite real chunks
     claim_checks: list[ClaimCheck] = field(default_factory=list)

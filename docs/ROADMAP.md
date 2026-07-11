@@ -69,9 +69,9 @@ beating fusion-only, measured against the eval set, not asserted by
 inspection; a simulated Cohere failure (FR-3.2) still returns a usable,
 fusion-ranked response.
 
-## M3 — Grounded generation, citations, faithfulness, abstain, tool use (FR5, FR6, FR7, FR8)
+## M3 — Grounded generation, citations, faithfulness, abstain, tool use (FR5, FR6, FR7, FR8, FR15)
 
-- [x] **M3 status: done** — merged to `main`, verified (`scripts/eval_m3.py`: NFR-9 citation validity PASS, NFR-8 abstain correctness PASS, FR-4.2 tool-call bound PASS across repeated runs; UC-8 faithfulness pass rate 66.7%–100% across repeated runs — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions))
+- [x] **M3 status: done** — on `m3-generation` branch (not yet merged), verified (`scripts/eval_m3.py`: NFR-9 citation validity PASS, NFR-8 abstain correctness PASS, FR-4.2 tool-call bound PASS, FR-4.5 context recall PASS, FR-4.4 sufficiency gate PASS (UC-5 consistently caught by `check_sufficiency`, before `generate`/`faithfulness` ever run) across repeated runs; UC-8 faithfulness pass rate 66.7%–100%, answer relevance rate 100% (NFR-10), across repeated runs — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions))
 
 **Goal:** the centerpiece milestone — wires the LangGraph read path
 end-to-end and proves the governing principle (verifiable-or-abstain) holds
@@ -81,17 +81,23 @@ on real queries.
 - [x] `generate` node: citation-constrained answer generation from the top-k, via the provider-agnostic LLM (`ADR-007`)
 - [x] The retrieval tool (FR8), bound to `generate`, inheriting the original request's `access_context`/filters (FR-4.3)
 - [x] `faithfulness` node: LLM-as-judge scoring (`ADR-006`), gating the abstain decision
+- [x] Answer-relevance scoring folded into the same judge call (FR-5.4): a faithful-but-off-topic answer still abstains
 - [x] `response` node: the full structured API response shape ([API-CONTRACTS.md](API-CONTRACTS.md))
+- [x] Context-recall check on the tool-use path (FR-4.5): verifies the final chunk set actually contains the second-hop document, not just that a tool call fired
+- [x] `check_sufficiency` node (FR15; `ADR-010`): a tiered score-gate + LLM judge that gates generation on whether retrieved context is adequate, independent of the generator's own self-assessment — short-circuits to abstain before `generate`/`faithfulness` run on obviously-hopeless context
 
 **Unlocks:** the first end-to-end answer the project produces. Also the
 first real test of `ADR-001`'s LangGraph bet — the retrieval-tool loop is
 the first cycle in the graph to actually execute.
 
-**Verify:** UC-8 (well-grounded case) passes faithfulness cleanly; UC-4
-(multi-hop) triggers exactly one additional tool call with a refined query;
-UC-5 (unanswerable) produces an explicit abstention, never a fabricated
-answer — this is the milestone where the project's central claim
-("grounded or abstain") either holds up or doesn't.
+**Verify:** UC-8 (well-grounded case) passes faithfulness *and* answer
+relevance cleanly (FR-5.4); UC-4 (multi-hop) triggers exactly one additional
+tool call with a refined query, and the final chunk set actually recalls the
+second-hop document (FR-4.5); UC-5 (unanswerable) produces an explicit
+abstention, never a fabricated answer, ideally caught by `check_sufficiency`
+before `generate`/`faithfulness` even run (FR15) — this is the milestone
+where the project's central claim ("grounded or abstain") either holds up or
+doesn't.
 
 ## M4 — Semantic caching, ACL-aware (FR9)
 

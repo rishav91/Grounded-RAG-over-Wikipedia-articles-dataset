@@ -22,7 +22,8 @@ like a probability and isn't one.
 |---|---|---|---|
 | Generation (`generate` node, FR5) | A drafted answer with inline citations | No — synthesizing fluent, citation-constrained prose from retrieved chunks is exactly the unstructured-language job nothing deterministic does | Core to the technique being demonstrated |
 | Tool-call planning (`generate` node, FR8) | A decision to call the retrieval tool again, and with what query | Partially — a fixed "always retrieve twice" rule could substitute, but judging whether the first pass was *sufficient* needs language understanding of the draft against the question | Is the pattern being practiced |
-| Faithfulness judgment (`faithfulness` node, FR6) | A grounding/coverage judgment, a reason, and a confidence value | Partially — exact-string citation-*presence* is feasible deterministically (the hybrid approach deferred in [ADR-006](ADRs.md#adr-006)), but judging whether a cited chunk's *meaning* actually supports a specific claim needs language understanding | Is the pattern being practiced; the deferred hybrid is the documented fallback if this proves unreliable |
+| Context sufficiency judgment (`check_sufficiency` node, tier 2 only, FR15) | A sufficient/insufficient verdict, confidence, and the specific missing aspects | Mostly — the tier-1 score gate (`ADR-010`) already handles the deterministic-ish extremes (obviously hopeless or obviously fine) without an LLM; only the genuinely ambiguous middle band, where judging whether a possibly multi-part question is *fully* covered by a set of chunks needs language understanding, reaches the LLM | The tiered design exists specifically to keep this an LLM call only where a deterministic score can't decide |
+| Faithfulness judgment (`faithfulness` node, FR6, FR-5.4) | A grounding/coverage judgment, an answer-relevance judgment, a reason, and a confidence value | Partially — exact-string citation-*presence* is feasible deterministically (the hybrid approach deferred in [ADR-006](ADRs.md#adr-006)), but judging whether a cited chunk's *meaning* actually supports a specific claim, or whether the answer addresses the question, needs language understanding | Is the pattern being practiced; the deferred hybrid is the documented fallback if this proves unreliable |
 | Dense embedding (ingestion + query-time) | A vector, not text | N/A — not an LLM call at all; a bi-encoder, classical ML | Powers FR2's dense leg ([ADR-002](ADRs.md#adr-002)) |
 | Sparse vectorization | A sparse vector, not text | N/A — deterministic term-frequency statistics (BM25-style), no model involved | Powers FR2's sparse leg |
 | Reranking (Cohere, FR4) | A relevance score per candidate, not text | N/A — a cross-encoder ranking model, not a generative LLM; never produces language | Powers FR4 ([ADR-003](ADRs.md#adr-003)) |
@@ -30,12 +31,21 @@ like a probability and isn't one.
 
 ## Pipeline / funnel
 
-The cache lookup is the funnel: a hit returns with **zero** LLM calls. A
-miss runs through two non-LLM scoring stages (dense+sparse fusion, then
-Cohere rerank) before either of the two LLM calls — generation, then the
-faithfulness judge — ever executes. This keeps LLM call volume to at most
-two per request (generation may add one extra round trip if it calls the
-retrieval tool, but that's a second *retrieval* call, not a third LLM call).
+There are now two funnels, not one. The cache lookup is the first: a hit
+returns with **zero** LLM calls. A miss runs through two non-LLM scoring
+stages (dense+sparse fusion, then Cohere rerank) before reaching
+`check_sufficiency` — the second funnel (FR15; `ADR-010`). Its tier-1 score
+gate resolves the obviously-hopeless and obviously-fine cases with **zero**
+further LLM calls, short-circuiting straight to an abstained response on the
+hopeless ones (skipping `generate`/`faithfulness` entirely) or straight to
+`generate` on the clearly-fine ones. Only the genuinely ambiguous middle
+band spends an LLM call on sufficiency itself.
+
+This keeps LLM call volume bounded, not fixed: as low as **zero** (cache hit
+or tier-1 insufficient), typically **two** (sufficient, generation +
+faithfulness), occasionally **three** (ambiguous context, sufficiency +
+generation + faithfulness — generation may itself add one extra *retrieval*
+round trip via the bound tool, not a fourth LLM call).
 
 ```mermaid
 flowchart LR
@@ -44,8 +54,11 @@ flowchart LR
     CL -->|miss| EMB["Embed query\nML bi-encoder, not LLM"]
     EMB --> RET["retrieve\ndense+sparse fusion\ndeterministic + ML, not LLM"]
     RET --> RR["rerank\nCohere cross-encoder\nML, not LLM"]
-    RR --> GEN["generate\nLLM call\n+ possible tool-call round trip"]
-    GEN --> FAITH["faithfulness\nLLM call, judge"]
+    RR --> SUFF{"check_sufficiency\nscore-gate, LLM only if ambiguous"}
+    SUFF -->|obviously hopeless: 0 LLM calls| R1["Abstain\nno generation attempted"]
+    SUFF -->|ambiguous: 1 LLM call| GEN["generate\nLLM call\n+ possible tool-call round trip"]
+    SUFF -->|obviously fine: 0 LLM calls| GEN
+    GEN --> FAITH["faithfulness\nLLM call, judge\n+ answer relevance"]
     FAITH --> RESP["Structured response"]
 ```
 
@@ -77,9 +90,11 @@ flowchart LR
 | Dense semantic similarity | ML, not LLM — OpenAI bi-encoder embedding, cosine/dot scoring |
 | Candidate reranking | ML, not LLM — Cohere cross-encoder |
 | Cache-cluster matching | ML, not LLM — embedding similarity, scoped by the `acl_signature` filter |
+| Context sufficiency, tier 1 (obvious cases) | Deterministic — Cohere `relevance_score` threshold gate ([ADR-010](ADRs.md#adr-010)) |
 | Answer synthesis + citations | LLM |
 | Tool-call planning (whether/what to re-retrieve) | LLM |
-| Faithfulness judgment + confidence | LLM |
+| Context sufficiency, tier 2 (ambiguous cases) | LLM |
+| Faithfulness judgment + answer relevance + confidence | LLM |
 | Query rewriting / decomposition (Phase 2, not built) | LLM |
 
 ```mermaid
@@ -87,6 +102,7 @@ flowchart LR
     subgraph DET ["Deterministic — same answer for the same inputs"]
         D1["Qdrant payload filter\ndoc_type, acl_tags, dates"]
         D2["Sparse term statistics\nBM25-style"]
+        D3["Sufficiency score gate\ntier 1, ADR-010"]
     end
     subgraph ML ["ML, not LLM"]
         M1["Dense embedding similarity\nOpenAI bi-encoder"]
@@ -95,8 +111,9 @@ flowchart LR
     subgraph LLM ["LLM — configured provider, via ADR-007"]
         L1["Answer synthesis + citations\ngenerate node"]
         L2["Tool-call planning\ngenerate node"]
-        L3["Faithfulness judgment\nfaithfulness node"]
-        L4["Query rewriting — Phase 2, not built"]
+        L3["Sufficiency judgment\ntier 2, ambiguous cases only"]
+        L4["Faithfulness + answer-relevance judgment\nfaithfulness node"]
+        L5["Query rewriting — Phase 2, not built"]
     end
 ```
 

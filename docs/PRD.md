@@ -59,6 +59,7 @@ This is the rule every later "should we build X?" question resolves against, inc
 - **Why ACL pre-filtering happens before retrieval, not as a post-filter on the answer.** Permission has to bound what evidence ever reaches the generator, not just what gets shown — see [§7.1](#71-key-design-decisions-carried-from-architecture-work).
 - **Why the semantic cache key includes the ACL signature (FR9), not just query similarity.** A cached answer is itself an unverified claim until it's re-checked against the *current* caller's permissions — caching can't be allowed to silently widen who an answer's evidence is shown to.
 - **Why future phases (query rewriting, parallel tool calls) don't get a faster path that skips faithfulness.** Any new way of producing an answer inherits the same gate; "it's a new mechanism" is never a reason to exempt it.
+- **Why generation is gated on an upfront sufficiency check (FR15), not left to the faithfulness check alone.** Faithfulness only catches an ungrounded answer *after* generation already ran; a sufficiency check that judges the retrieved context by itself, before generation, means "there was nothing to work with" is never mistaken for — or allowed to consume the same call budget as — an actual generation failure. See [ADR-010](ADRs.md#adr-010).
 
 ---
 
@@ -163,6 +164,7 @@ Priorities: **P0** ships in the MVP. **P1** is designed for and sequenced into l
 | FR12 | Parallel tool calls with partial failure handling, so multiple retrievals or tools run concurrently and a single failure degrades gracefully | P1 |
 | FR13 | Per request observability: a trace spanning retrieve, rerank, generate, and faithfulness | P1 |
 | FR14 | Feedback ingestion (thumbs up/down) to drive offline evaluation | P2 |
+| FR15 | Context sufficiency check: gate generation on whether the retrieved context is adequate to answer, independent of the generator's own self-assessment | P0 |
 
 Full acceptance criteria, stable sub-IDs (`FR-x.y`), and non-functional requirements are in [REQUIREMENTS.md](REQUIREMENTS.md).
 

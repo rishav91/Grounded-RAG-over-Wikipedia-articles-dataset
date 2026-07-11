@@ -28,13 +28,15 @@ on the labeled eval set (`UC-1`..`UC-8`) in
 | FR-3.1 | `rerank` calls Cohere Rerank API (`rerank-v3.5`) over the candidate set, returns a precise top-k | P0 | UC-2: precision@3 (rerank) ≥ precision@3 (fusion-only) + 15 points on the ambiguous-candidate case (*Assumption — see [Open assumptions](#open-assumptions)*) |
 | FR-3.2 | A Cohere API failure degrades to fusion-only ranking, never a failed request | P0 | Simulated Cohere failure (e.g. invalid key) still returns a `200` with fusion-ranked chunks — [ADR-003](ADRs.md#adr-003) |
 
-### FR-4.x — Grounded generation & tool use (FR5, FR8)
+### FR-4.x — Grounded generation & tool use (FR5, FR8, FR15)
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
 | FR-4.1 | `generate` answers using only the provided top-k context, with inline citations | P0 | UC-1, UC-8: every claim has ≥1 citation; every citation's `chunk_id` is in this response's `retrieved_chunks` |
 | FR-4.2 | `generate` can call the retrieval tool when the first pass is insufficient, with a query derived from the first pass's result | P0 | UC-4: exactly one additional tool call fires, with a refined (not repeated) query |
 | FR-4.3 | The retrieval tool inherits the request's `access_context`/`filters`; the model cannot widen them | P0 | The tool schema doesn't expose `access_context`/`filters` as model-settable parameters — [API-CONTRACTS.md](API-CONTRACTS.md#the-retrieval-tool-fr8) |
+| FR-4.4 | `check_sufficiency` gates generation on whether the retrieved context is adequate, independent of the generator's own self-assessment (FR15; `ADR-010`) | P0 | UC-5: a query with no relevant chunks (score below `SUFFICIENCY_LOW_SCORE_THRESHOLD`) short-circuits to an abstained response without `generate`/`faithfulness` ever running; a sufficiency-judge failure fails open (proceeds to `generate`), never blocks the request |
+| FR-4.5 | Context recall: for a multi-hop query, the final retrieved set (first pass + tool call) contains every document actually needed to answer, not just the document the first pass happened to find | P0 | UC-4: the tool call's refined query resolves back to the case's labeled `second_hop_doc_id`, verified against the graph's final chunk set directly — a RAGAS-style context-recall check, scoped to the one case where recall genuinely can't be assessed by a single `expected_doc_id` (M1's FR-2.3 already covers single-hop recall) |
 
 ### FR-5.x — Faithfulness & abstain (FR6, FR7)
 
@@ -43,6 +45,7 @@ on the labeled eval set (`UC-1`..`UC-8`) in
 | FR-5.1 | `faithfulness` scores each cited claim against its cited chunk, produces pass/fail + confidence | P0 | UC-8: a well-grounded answer passes with `confidence ≥ 0.7` (*Assumption — threshold pending real measurement*) |
 | FR-5.2 | A faithfulness fail converts the response into an explicit abstention | P0 | UC-5: a genuinely unanswerable query returns `abstained: true`, `answer: null`, `retrieved_chunks` still populated |
 | FR-5.3 | An abstained response is never written to `query_cache` | P0 | Re-submitting UC-5's query+context twice returns `cache_hit: false` both times |
+| FR-5.4 | `faithfulness` also scores answer relevance — whether the answer actually addresses the question — independent of citation support; either gate failing converts the response into an abstention | P0 | UC-8: `FaithfulnessJudgment.answers_question` is scored in the same judge call as claim support (no added LLM call); a faithful-but-off-topic answer (`passed=True, answers_question=False`) still abstains — a RAGAS-style "answer relevance" check, folded into the existing `ADR-006` judge rather than a separate mechanism |
 
 ### FR-6.x — ACL-aware semantic caching (FR9)
 
@@ -85,6 +88,7 @@ on the labeled eval set (`UC-1`..`UC-8`) in
 | NFR-7 | Faithfulness rate (non-abstained answers fully supported) | ≥ 98% on the eval set (*Assumption — placeholder pending real measurement*) | Same bar; doesn't relax with scale |
 | NFR-8 | Abstention correctness on deliberately unanswerable queries (UC-5 class) | 100% — zero fabricated answers tolerated | Same bar |
 | NFR-9 | Citation validity | 100% — every citation resolves to a retrieved chunk | Same bar; enforced structurally per [API-CONTRACTS.md](API-CONTRACTS.md#response--grounded) |
+| NFR-10 | Answer relevance rate (non-abstained answers that actually address the question asked) | ≥ 95% on the eval set (*Assumption — placeholder pending real measurement, same treatment as NFR-7*) | Same bar; doesn't relax with scale |
 
 ## Capacity sizing
 
@@ -179,6 +183,23 @@ real measurement exists:
   [ROADMAP.md](ROADMAP.md#m3--grounded-generation-citations-faithfulness-abstain-tool-use-fr5-fr6-fr7-fr8).
   A 3-case sample is too small to retire this number; revisit with a larger
   eval set before trusting it as a real ceiling.
+- **NFR-10 answer relevance rate (95%):** M3 (`scripts/eval_m3.py`, UC-8, 3
+  cases, `gpt-4o-mini`): 100% (3/3) across repeated runs, meeting the
+  placeholder. In every run so far, the recurring faithfulness borderline
+  case (Analytical Engine, see above) fails on citation *support*, never on
+  relevance — the two axes are behaving as genuinely independent signals,
+  not duplicating one failure mode. Still a 3-case sample; not retired as a
+  real ceiling.
+- **FR-4.4 sufficiency score thresholds (`SUFFICIENCY_LOW_SCORE_THRESHOLD = 0.2`,
+  `SUFFICIENCY_HIGH_SCORE_THRESHOLD = 0.6`, `ADR-010`):** picked from a
+  handful of observed cases (M3's UC-5/UC-8 chunk scores), not a calibrated
+  distribution — same treatment as `FR-5.1`'s confidence threshold. M3
+  (`scripts/eval_m3.py`, UC-5, 1 case): the pho query's chunk scores
+  (0.05–0.10) land well below the 0.2 low threshold, consistently caught by
+  the tier-1 score gate across repeated runs — `generate`/`faithfulness`
+  never ran for this case, the cost win `ADR-010` is designed for. A single
+  case can't validate the threshold itself, only confirm the mechanism
+  fires; pending a larger eval set before trusting the exact cutoff.
 - **Cache-hit similarity threshold (cosine ≥ 0.92, [DATA-MODEL.md](DATA-MODEL.md)):**
   picked without real paraphrase data; tune against observed false-hit rate
   once M4 is built.

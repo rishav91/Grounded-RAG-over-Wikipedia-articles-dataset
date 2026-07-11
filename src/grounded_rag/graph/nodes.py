@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from grounded_rag.cache.cache import lookup_cache, write_cache
 from grounded_rag.cache.records import CacheLookupResult
-from grounded_rag.config import TOOL_CALL_MAX_ROUNDS
+from grounded_rag.config import MAX_PARALLEL_RETRIEVE_CALLS, TOOL_CALL_MAX_ROUNDS
 from grounded_rag.faithfulness.faithfulness import judge_faithfulness
 from grounded_rag.generation.generate import SubmitAnswer, generate
 from grounded_rag.generation.prompts import SYSTEM_PROMPT, build_question_prompt, format_context
@@ -120,21 +120,61 @@ def generate_node(deps: GraphDeps, state: GraphState) -> dict:
 
 
 def execute_tool_node(deps: GraphDeps, state: GraphState) -> dict:
+    # FR12/ADR-012: a round may request more than one retrieve_chunks call —
+    # they run concurrently, capped at MAX_PARALLEL_RETRIEVE_CALLS. Every
+    # tool_call_id gets exactly one ToolMessage back, win or lose, since
+    # OpenAI's API requires a response for each one on the next turn.
     last_message = state["messages"][-1]
-    call = last_message.tool_calls[0]
+    calls = last_message.tool_calls
+    runnable_calls, skipped_calls = calls[:MAX_PARALLEL_RETRIEVE_CALLS], calls[MAX_PARALLEL_RETRIEVE_CALLS:]
 
     retrieve_tool = build_retrieve_tool(deps, state)
-    new_chunks = retrieve_tool.invoke(call["args"])
+
+    def run(call: dict) -> tuple[str, list, Exception | None]:
+        try:
+            return call["id"], retrieve_tool.invoke(call["args"]), None
+        except Exception as exc:  # noqa: BLE001 - a failed call degrades that call, not the round
+            return call["id"], [], exc
+
+    if len(runnable_calls) <= 1:
+        results = [run(call) for call in runnable_calls]
+    else:
+        with ThreadPoolExecutor(max_workers=len(runnable_calls)) as pool:
+            results = list(pool.map(run, runnable_calls))
+
+    tool_messages = []
+    new_chunk_lists = []
+    for call_id, new_chunks, error in results:
+        if error is None:
+            new_chunk_lists.append(new_chunks)
+            # The model can only cite what it can actually see — the labeled
+            # chunk content must round-trip back into the conversation, not
+            # just a count.
+            tool_messages.append(ToolMessage(content=format_context(new_chunks), tool_call_id=call_id))
+        else:
+            tool_messages.append(
+                ToolMessage(
+                    content=(
+                        f"This search failed: {error}. Use the results from any other search "
+                        "calls, or answer using the context already available."
+                    ),
+                    tool_call_id=call_id,
+                )
+            )
+    for call in skipped_calls:
+        tool_messages.append(
+            ToolMessage(
+                content=f"Skipped: at most {MAX_PARALLEL_RETRIEVE_CALLS} searches are allowed per round.",
+                tool_call_id=call["id"],
+            )
+        )
 
     known_ids = {chunk.chunk_id for chunk in state["chunks"]}
-    merged_chunks = list(state["chunks"]) + [c for c in new_chunks if c.chunk_id not in known_ids]
-    # The model can only cite what it can actually see — the labeled chunk
-    # content must round-trip back into the conversation, not just a count.
-    tool_message = ToolMessage(content=format_context(new_chunks), tool_call_id=call["id"])
+    new_chunks = [c for c in _merge_dedup_chunks(new_chunk_lists) if c.chunk_id not in known_ids]
 
     return {
-        "chunks": merged_chunks,
-        "messages": [tool_message],
+        "chunks": list(state["chunks"]) + new_chunks,
+        "messages": tool_messages,
         "tool_call_count": state["tool_call_count"] + 1,
     }
 

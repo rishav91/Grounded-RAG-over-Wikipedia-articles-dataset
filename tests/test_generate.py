@@ -50,8 +50,48 @@ def test_generate_parses_retrieve_chunks_tool_call():
     _, result = generate(llm, messages=[], tools=[])
 
     assert result.finished is False
-    assert result.tool_query == "who succeeded them"
-    assert result.tool_top_k == 5
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].query == "who succeeded them"
+    assert result.tool_calls[0].top_k == 5
+    assert result.tool_calls[0].call_id == "call_2"
+
+
+def test_generate_parses_multiple_parallel_retrieve_chunks_calls():
+    response = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": RETRIEVE_TOOL_NAME, "args": {"query": "fact one"}, "id": "call_a"},
+            {"name": RETRIEVE_TOOL_NAME, "args": {"query": "fact two"}, "id": "call_b"},
+        ],
+    )
+    llm = FakeToolCallingLLM(response)
+
+    _, result = generate(llm, messages=[], tools=[])
+
+    assert result.finished is False
+    assert [c.query for c in result.tool_calls] == ["fact one", "fact two"]
+    assert [c.call_id for c in result.tool_calls] == ["call_a", "call_b"]
+
+
+def test_generate_submit_answer_wins_over_concurrent_retrieve_calls():
+    response = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": RETRIEVE_TOOL_NAME, "args": {"query": "fact one"}, "id": "call_a"},
+            {
+                "name": SUBMIT_ANSWER_TOOL_NAME,
+                "args": {"answer": "the answer", "citations": []},
+                "id": "call_b",
+            },
+        ],
+    )
+    llm = FakeToolCallingLLM(response)
+
+    _, result = generate(llm, messages=[], tools=[])
+
+    assert result.finished is True
+    assert result.answer == "the answer"
+    assert result.tool_calls == []
 
 
 def test_generate_with_no_tool_calls_degrades_safely():
@@ -62,4 +102,4 @@ def test_generate_with_no_tool_calls_degrades_safely():
 
     assert result.finished is False
     assert result.answer is None
-    assert result.tool_query is None
+    assert result.tool_calls == []

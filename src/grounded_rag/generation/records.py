@@ -12,16 +12,27 @@ class Citation:
 
 
 @dataclass(frozen=True)
-class GenerationResult:
-    """One round's outcome: either a finished answer, or a request to re-retrieve.
+class ToolCallRequest:
+    """One `retrieve_chunks` call requested in a generation round (FR12;
+    ADR-012) — `call_id` is the tool_call_id the resulting ToolMessage must
+    answer, since a round may request more than one call at once."""
 
-    `finished=False` with `tool_query=None` means the model didn't call a
+    call_id: str
+    query: str
+    top_k: int
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    """One round's outcome: either a finished answer, or one or more requests
+    to re-retrieve (FR12: possibly executed concurrently).
+
+    `finished=False` with `tool_calls=[]` means the model didn't call a
     recognized tool at all (shouldn't happen under `tool_choice="required"`,
     but the graph must still degrade to abstain rather than crash on it).
     """
 
     answer: str | None
     citations: list[Citation]
-    tool_query: str | None
-    tool_top_k: int | None
+    tool_calls: list[ToolCallRequest]
     finished: bool

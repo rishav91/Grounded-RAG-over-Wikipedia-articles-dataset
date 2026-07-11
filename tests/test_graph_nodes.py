@@ -318,6 +318,55 @@ def test_retrieve_node_skips_fan_out_when_no_sub_queries(monkeypatch):
     assert [c.chunk_id for c in result["chunks"]] == ["a"]
 
 
+class FakeRetrieveTool:
+    """Stands in for `build_retrieve_tool`'s return value — `invoke(args)`
+    either returns chunks or raises, keyed on the query text."""
+
+    def invoke(self, args):
+        if args["query"] == "fail":
+            raise RuntimeError("simulated retrieval outage")
+        return [make_chunk(f"c-{args['query']}", 0.9)]
+
+
+def test_execute_tool_node_runs_concurrent_calls_and_degrades_on_partial_failure(monkeypatch):
+    monkeypatch.setattr(nodes_module, "build_retrieve_tool", lambda deps, state: FakeRetrieveTool())
+    state = base_state(
+        messages=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": RETRIEVE_TOOL_NAME, "args": {"query": "ok"}, "id": "call_a"},
+                    {"name": RETRIEVE_TOOL_NAME, "args": {"query": "fail"}, "id": "call_b"},
+                ],
+            )
+        ],
+        tool_call_count=0,
+    )
+
+    result = nodes_module.execute_tool_node(make_deps(), state)
+
+    assert result["tool_call_count"] == 1
+    # "c1" was already in state["chunks"] (base_state); "c-ok" is the new one
+    # the surviving call fetched.
+    assert {c.chunk_id for c in result["chunks"]} == {"c1", "c-ok"}
+    tool_messages = {m.tool_call_id: m.content for m in result["messages"]}
+    assert set(tool_messages) == {"call_a", "call_b"}
+    assert "simulated retrieval outage" in tool_messages["call_b"]
+
+
+def test_execute_tool_node_skips_calls_beyond_the_parallel_cap(monkeypatch):
+    monkeypatch.setattr(nodes_module, "build_retrieve_tool", lambda deps, state: FakeRetrieveTool())
+    calls = [{"name": RETRIEVE_TOOL_NAME, "args": {"query": f"q{i}"}, "id": f"call_{i}"} for i in range(5)]
+    state = base_state(messages=[AIMessage(content="", tool_calls=calls)], tool_call_count=0)
+
+    result = nodes_module.execute_tool_node(make_deps(), state)
+
+    tool_messages = {m.tool_call_id: m.content for m in result["messages"]}
+    assert len(tool_messages) == 5  # every call still gets a ToolMessage (MAX_PARALLEL_RETRIEVE_CALLS=3)
+    assert "Skipped" in tool_messages["call_3"]
+    assert "Skipped" in tool_messages["call_4"]
+
+
 def test_route_after_generate_retrieve_call_goes_to_execute_tool():
     state = base_state(
         messages=[AIMessage(content="", tool_calls=[{"name": RETRIEVE_TOOL_NAME, "args": {"query": "q2"}, "id": "1"}])]

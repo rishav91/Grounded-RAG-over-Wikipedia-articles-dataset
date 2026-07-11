@@ -66,6 +66,16 @@ RERANK_MODEL = "rerank-v3.5"
 # generation after rerank.
 RERANK_TOP_K = 5
 
+# FR-5.1: confidence threshold gating the abstain decision — an arbitrary
+# starting cut, flagged as a placeholder in REQUIREMENTS.md's Open
+# assumptions pending the real score distribution observed in M3.
+FAITHFULNESS_CONFIDENCE_THRESHOLD = 0.7
+
+# FR-4.2 / UC-4: the retrieval tool may fire at most this many additional
+# rounds per request — "exactly one additional tool call fires," not an
+# open-ended agentic loop.
+TOOL_CALL_MAX_ROUNDS = 1
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -73,6 +83,14 @@ class Settings:
     qdrant_url: str = field(default_factory=lambda: os.environ.get("QDRANT_URL", "http://localhost:6333"))
     qdrant_api_key: str | None = field(default_factory=lambda: os.environ.get("QDRANT_API_KEY") or None)
     cohere_api_key: str | None = field(default_factory=lambda: os.environ.get("COHERE_API_KEY") or None)
+    # ADR-007: provider-agnostic via init_chat_model, no default pinned here —
+    # the operator sets the provider/model string via env config (see
+    # .env.example). faithfulness_model falls back to generation_model so the
+    # two are independently swappable only when the operator opts in.
+    generation_model: str | None = field(default_factory=lambda: os.environ.get("GENERATION_MODEL") or None)
+    faithfulness_model: str | None = field(
+        default_factory=lambda: os.environ.get("FAITHFULNESS_MODEL") or os.environ.get("GENERATION_MODEL") or None
+    )
 
 
 def get_settings() -> Settings:

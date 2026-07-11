@@ -136,5 +136,14 @@
       "access_context_groups_a": ["public"],
       "access_context_groups_b": ["eng"]
     }
+  ],
+  "uc9_cases": [
+    {
+      "id": "uc9-adam-smith-and-azerbaijan",
+      "query": "What is Adam Smith known for, and where is Azerbaijan located?",
+      "access_context_groups": ["public"],
+      "doc_id_a": "1814",
+      "doc_id_b": "746"
+    }
   ]
 }

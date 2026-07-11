@@ -99,6 +99,20 @@ class UC7Case:
 
 
 @dataclass(frozen=True)
+class UC9Case:
+    """UC-9: a bundled, genuinely independent multi-part query — each half
+    names its own subject already, so rewrite_query should decompose it into
+    sub_queries and retrieve both articles' chunks in the first pass, without
+    the reactive tool call ever firing (FR11; ADR-011)."""
+
+    id: str
+    query: str
+    access_context_groups: list[str]
+    doc_id_a: str
+    doc_id_b: str
+
+
+@dataclass(frozen=True)
 class EvalSet:
     uc1_cases: list[UC1Case]
     uc2_cases: list[UC2Case]
@@ -108,6 +122,7 @@ class EvalSet:
     uc8_cases: list[UC8Case]
     uc6_cases: list[UC6Case]
     uc7_cases: list[UC7Case]
+    uc9_cases: list[UC9Case]
 
 
 def load_eval_set() -> EvalSet:
@@ -121,4 +136,5 @@ def load_eval_set() -> EvalSet:
         uc8_cases=[UC8Case(**case) for case in raw["uc8_cases"]],
         uc6_cases=[UC6Case(**case) for case in raw["uc6_cases"]],
         uc7_cases=[UC7Case(**case) for case in raw["uc7_cases"]],
+        uc9_cases=[UC9Case(**case) for case in raw["uc9_cases"]],
     )

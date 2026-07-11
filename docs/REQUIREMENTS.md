@@ -216,6 +216,20 @@ real measurement exists:
   real measurement is a Stage 2 scale-roadmap item
   ([ROADMAP.md](ROADMAP.md#scale-stages)), not something the 1K-doc MVP's
   low query volume can produce.
+- **FR-7.1 answered-both-parts rate (UC-9, `scripts/eval_m5.py`, 1 case,
+  `gpt-4o-mini`):** the decompose *mechanism* (sub_queries produced,
+  both articles' chunks recalled in the first pass, the reactive tool
+  call never needed) held at 100% across every run observed. Whether the
+  generator's answer actually covers both decomposed parts is far less
+  reliable: 1/6 (17%) across two 3-run batches before
+  `build_question_prompt` was changed to enumerate the decomposed
+  sub-questions explicitly (`ADR-011` addendum), improving to 4/9 (44%)
+  across three 3-run batches after that fix — a real, measured
+  improvement, but not massaged toward a target; `gpt-4o-mini` still
+  drops one half on a majority of runs even with both halves named
+  explicitly in the prompt. A 1-case sample; revisit with a larger eval
+  set, or a stronger generation model, before treating either number as a
+  ceiling.
 - **FR-7.1 decontextualization is effectively unexercised by this MVP:**
   `POST /query`'s contract ([API-CONTRACTS.md](API-CONTRACTS.md)) carries no
   conversation history — every request is a single, self-contained turn —

@@ -574,6 +574,27 @@ diluted embedding search.
   single-turn contract — flagged, not hidden, in
   [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions).
 
+**Addendum (M5 live eval):** the first UC-9 run (a bundled
+Adam-Smith/Azerbaijan question) decomposed and recalled both articles'
+chunks correctly, but the generator's draft answer only ever addressed one
+half — every run, consistently, despite both docs dominating the retrieved
+context. The cause wasn't decompose's mechanism: `generate` was still
+building its human-message question from the flat, un-decomposed
+`state["query"]`, never surfacing `rewrite.sub_queries` to the model at
+all. Fix: `build_question_prompt` gained an optional `sub_questions`
+parameter that enumerates the decomposed parts explicitly in the prompt
+(`generation/prompts.py`), and `generate_node` passes `rewrite.sub_queries`
+through. This measurably improved the answered-both-parts rate (1/6 across
+two 3-run batches before the fix, to 4/9 across three 3-run batches after
+it) but did **not** make it reliable — `gpt-4o-mini` still drops one half
+on a majority of runs even with both halves named explicitly. Reported
+honestly as a measured rate in [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions),
+same treatment as `NFR-7`/`NFR-10`'s UC-8 numbers — not massaged toward
+100%. The decompose *mechanism* itself (sub_queries produced, both
+articles recalled, reactive tool call never needed) held at 100% across
+every run in all batches; the gap is entirely downstream, in generation
+coverage.
+
 ---
 
 <a id="adr-012"></a>

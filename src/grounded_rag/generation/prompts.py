@@ -15,6 +15,11 @@ user's question using ONLY the labeled context chunks provided in the human \
 message — never your own background knowledge.
 
 Rules:
+- The question may have multiple, independent parts (e.g. "What is X known \
+for, and where is Y located?"). Address EVERY part your answer can support \
+from the given chunks — do not answer only the first or most prominent \
+part and drop the rest, even if their evidence comes from a different \
+chunk than the first part's.
 - Every factual claim in your answer must be backed by at least one context \
 chunk. Cite that chunk's exact chunk_id string, copied verbatim from its \
 "[chunk_id]" label (e.g. "5a8243c8-52ad-5d68-a9a2-360226de0dda") — never a \
@@ -42,5 +47,14 @@ def format_context(chunks: list[RetrievedChunk]) -> str:
     return "Context:\n\n" + "\n\n".join(blocks)
 
 
-def build_question_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
-    return f"{format_context(chunks)}\n\nQuestion: {query}"
+def build_question_prompt(query: str, chunks: list[RetrievedChunk], sub_questions: list[str] | None = None) -> str:
+    question_block = f"Question: {query}"
+    if sub_questions:
+        # FR11/ADR-011: when rewrite_query decomposed the question, name the
+        # independent parts explicitly — a flat, un-decomposed question text
+        # measurably under-answers multi-part questions even when every
+        # part's evidence is already in the context (see REQUIREMENTS.md
+        # Open assumptions' UC-9 note).
+        parts = "\n".join(f"{i + 1}. {sub_question}" for i, sub_question in enumerate(sub_questions))
+        question_block += f"\n\nThis question has multiple independent parts — address EVERY one of them:\n{parts}"
+    return f"{format_context(chunks)}\n\n{question_block}"

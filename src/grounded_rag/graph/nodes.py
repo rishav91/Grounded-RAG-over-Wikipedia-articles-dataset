@@ -106,7 +106,10 @@ def check_sufficiency_node(deps: GraphDeps, state: GraphState) -> dict:
 def generate_node(deps: GraphDeps, state: GraphState) -> dict:
     messages = state["messages"]
     if not messages:
-        messages = [SystemMessage(SYSTEM_PROMPT), HumanMessage(build_question_prompt(state["query"], state["chunks"]))]
+        rewrite = state["rewrite"]
+        sub_questions = rewrite.sub_queries if rewrite is not None else None
+        prompt = build_question_prompt(state["query"], state["chunks"], sub_questions=sub_questions)
+        messages = [SystemMessage(SYSTEM_PROMPT), HumanMessage(prompt)]
 
     allow_retrieve_tool = state["tool_call_count"] < TOOL_CALL_MAX_ROUNDS
     tools = [SubmitAnswer] + ([build_retrieve_tool(deps, state)] if allow_retrieve_tool else [])

@@ -101,15 +101,15 @@ doesn't.
 
 ## M4 — Semantic caching, ACL-aware (FR9)
 
-- [ ] **M4 status: not started**
+- [x] **M4 status: done** — merged to `main`, verified (`scripts/eval_m4.py`: UC-6 cache-hit PASS, UC-7 cross-context cache safety PASS — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions))
 
 **Goal:** add the cache, and prove the one property that can never regress:
 no answer crosses an access boundary.
 
 **Ships:**
-- [ ] `cache_lookup` node and the `query_cache` Qdrant collection ([DATA-MODEL.md](DATA-MODEL.md))
-- [ ] Write-through from `response`, gated on a faithfulness pass (FR-6.3) — an abstained answer is never cached (FR-5.3)
-- [ ] `cache_hit` field surfaced in the API response ([API-CONTRACTS.md](API-CONTRACTS.md))
+- [x] `cache_lookup` node and the `query_cache` Qdrant collection ([DATA-MODEL.md](DATA-MODEL.md))
+- [x] Write-through from `response`, gated on a faithfulness pass (FR-6.3) — an abstained answer is never cached (FR-5.3)
+- [x] `cache_hit` field surfaced in the API response ([API-CONTRACTS.md](API-CONTRACTS.md))
 
 **Unlocks:** the cache hit rate measurement that everything in
 [PRD.md §12](PRD.md#12-risks-and-open-questions) and

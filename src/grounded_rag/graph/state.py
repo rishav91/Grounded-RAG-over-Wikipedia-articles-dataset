@@ -11,6 +11,7 @@ from typing import Annotated, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+from grounded_rag.cache.records import CacheLookupResult
 from grounded_rag.faithfulness.records import FaithfulnessResult
 from grounded_rag.generation.records import Citation
 from grounded_rag.retrieval.records import RetrievedChunk
@@ -25,6 +26,12 @@ class GraphState(TypedDict):
     date_range: dict[str, str] | None
     top_k: int
     allow_generation: bool
+    bypass_cache: bool
+
+    # cache_lookup's verdict (FR9; ADR-005). Node id is "cache_lookup", not
+    # "cache_result" — avoids the node-id/state-key collision langgraph
+    # rejects at add_node time (see M3's judge_faithfulness/faithfulness).
+    cache_result: CacheLookupResult | None
 
     # Retrieval/rerank output — grows if the retrieval tool fires (FR8).
     chunks: list[RetrievedChunk]

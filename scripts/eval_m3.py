@@ -62,6 +62,12 @@ def _initial_state(query: str, access_context_groups: list[str]) -> dict:
         "date_range": None,
         "top_k": 5,
         "allow_generation": True,
+        # M4's cache_lookup now runs first in the graph — bypass it so
+        # repeated eval runs measure retrieval/faithfulness quality fresh,
+        # not a stale cache hit (API-CONTRACTS.md's stated purpose for
+        # options.bypass_cache).
+        "bypass_cache": True,
+        "cache_result": None,
         "chunks": [],
         "reranked": False,
         "sufficiency": None,

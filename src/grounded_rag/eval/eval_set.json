@@ -121,5 +121,20 @@
       "access_context_groups": ["public"],
       "expected_doc_id": "2241"
     }
+  ],
+  "uc6_cases": [
+    {
+      "id": "uc6-alexander-fleming-repeat",
+      "query": "What did Alexander Fleming discover, and in what year?",
+      "access_context_groups": ["public"]
+    }
+  ],
+  "uc7_cases": [
+    {
+      "id": "uc7-alexander-fleming-cross-context",
+      "query": "What did Alexander Fleming discover, and in what year?",
+      "access_context_groups_a": ["public"],
+      "access_context_groups_b": ["eng"]
+    }
   ]
 }

@@ -20,6 +20,7 @@ def run_query(
     date_range: dict[str, str] | None = None,
     top_k: int = RERANK_TOP_K,
     allow_generation: bool = True,
+    bypass_cache: bool = False,
 ) -> dict:
     initial_state = {
         "query": query,
@@ -28,6 +29,8 @@ def run_query(
         "date_range": date_range,
         "top_k": top_k,
         "allow_generation": allow_generation,
+        "bypass_cache": bypass_cache,
+        "cache_result": None,
         "chunks": [],
         "reranked": False,
         "sufficiency": None,

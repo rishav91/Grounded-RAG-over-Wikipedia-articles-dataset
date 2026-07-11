@@ -76,6 +76,16 @@ FAITHFULNESS_CONFIDENCE_THRESHOLD = 0.7
 # open-ended agentic loop.
 TOOL_CALL_MAX_ROUNDS = 1
 
+# DATA-MODEL.md: second Qdrant collection for the ACL-aware semantic cache
+# (FR9; ADR-005). Reuses DENSE_VECTOR_NAME/EMBEDDING_DIM — the cache embeds
+# query text with the same model as article chunks, no separate config.
+QUERY_CACHE_COLLECTION = "query_cache"
+
+# DATA-MODEL.md: a cache lookup is a hit only if the top result's cosine
+# score clears this bar. Placeholder pending real paraphrase-pattern
+# measurement once M4 is live — see REQUIREMENTS.md Open assumptions.
+CACHE_SIMILARITY_THRESHOLD = 0.92
+
 # FR15 / ADR-010: check_sufficiency's tier-1 score gate, on Cohere's 0-1
 # relevance_score scale (only trusted when reranking actually ran — see
 # ADR-010). Below LOW: obviously hopeless, skip generation entirely. At or

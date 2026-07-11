@@ -201,8 +201,21 @@ real measurement exists:
   case can't validate the threshold itself, only confirm the mechanism
   fires; pending a larger eval set before trusting the exact cutoff.
 - **Cache-hit similarity threshold (cosine ≥ 0.92, [DATA-MODEL.md](DATA-MODEL.md)):**
-  picked without real paraphrase data; tune against observed false-hit rate
-  once M4 is built.
+  M4 (`scripts/eval_m4.py`, UC-6, 1 case): an exact-text repeat query scored
+  well above 0.92 (a verbatim repeat, not yet a paraphrase), so this run
+  only confirms the mechanism fires correctly, not where the real
+  false-hit/miss boundary sits — still pending real paraphrase data from a
+  larger eval set before the exact cutoff is trusted. FR-6.2/UC-7 (cross-
+  context safety) is a hard gate, not threshold-dependent, and held at
+  100% (no shared hit across `access_context` values) — see
+  [ROADMAP.md](ROADMAP.md#m4--semantic-caching-acl-aware-fr9).
+- **NFR-4 cache hit rate (40–60% planning assumption):** still unmeasured —
+  M4's eval only exercises the two structural UC-6/UC-7 cases (a verbatim
+  repeat and a cross-context probe), not a realistic query mix. Remains the
+  top risk flagged in [PRD.md §12](PRD.md#12-risks-and-open-questions);
+  real measurement is a Stage 2 scale-roadmap item
+  ([ROADMAP.md](ROADMAP.md#scale-stages)), not something the 1K-doc MVP's
+  low query volume can produce.
 - **Capacity sizing's sparse-vector and payload-text estimates:** rough
   approximations pending real chunk statistics from M0 (see
   [Capacity sizing](#capacity-sizing) above).

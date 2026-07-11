@@ -1,11 +1,17 @@
 from langchain_core.messages import AIMessage
 
+from grounded_rag.cache.records import CacheLookupResult
 from grounded_rag.faithfulness.records import FaithfulnessResult
 from grounded_rag.generation.generate import RETRIEVE_TOOL_NAME, SUBMIT_ANSWER_TOOL_NAME
 from grounded_rag.generation.records import Citation
-from grounded_rag.graph.build import _route_after_generate, _route_after_rerank, _route_after_sufficiency
+from grounded_rag.graph.build import (
+    _route_after_cache_lookup,
+    _route_after_generate,
+    _route_after_rerank,
+    _route_after_sufficiency,
+)
 from grounded_rag.graph.deps import GraphDeps
-from grounded_rag.graph.nodes import check_sufficiency_node, response_node
+from grounded_rag.graph.nodes import cache_lookup_node, check_sufficiency_node, response_node
 from grounded_rag.retrieval.records import RetrievedChunk
 from grounded_rag.sufficiency.records import SufficiencyResult
 from grounded_rag.sufficiency.sufficiency import SufficiencyJudgment
@@ -32,6 +38,8 @@ def base_state(**overrides) -> dict:
         "date_range": None,
         "top_k": 5,
         "allow_generation": True,
+        "bypass_cache": False,
+        "cache_result": CacheLookupResult(hit=False),
         "chunks": [make_chunk("c1")],
         "reranked": True,
         "sufficiency": SufficiencyResult(sufficient=True, confidence=0.9, reasoning="ok"),
@@ -67,6 +75,53 @@ def test_response_node_abstains_on_faithfulness_fail():
     assert len(result["retrieved_chunks"]) == 1  # still populated per API-CONTRACTS.md
 
 
+class FakeEmbeddingsResponse:
+    def __init__(self, vectors: list[list[float]]):
+        self.data = [type("Item", (), {"embedding": v})() for v in vectors]
+
+
+class FakeOpenAIClient:
+    """Stands in for the OpenAI SDK client `embed_dense` calls (`.embeddings.create`)."""
+
+    class _Embeddings:
+        def create(self, model, input):  # noqa: A002 - matches OpenAI SDK's kwarg name
+            return FakeEmbeddingsResponse([[0.1, 0.2, 0.3] for _ in input])
+
+    def __init__(self):
+        self.embeddings = self._Embeddings()
+
+
+class FakeQdrantPoint:
+    def __init__(self, score: float, payload: dict):
+        self.score = score
+        self.payload = payload
+
+
+class FakeQdrantClient:
+    """Records `upsert` calls (write-through) and returns a canned `query_points` result (lookup)."""
+
+    def __init__(self, query_points: list[FakeQdrantPoint] | None = None):
+        self.upserted_points = []
+        self._query_points = query_points or []
+
+    def upsert(self, collection_name, points):
+        self.upserted_points.append((collection_name, points))
+
+    def query_points(self, **kwargs):
+        return type("Result", (), {"points": self._query_points})()
+
+
+def make_deps(qdrant_client=None, openai_client=None) -> GraphDeps:
+    return GraphDeps(
+        qdrant_client=qdrant_client,
+        openai_client=openai_client,
+        cohere_client=None,
+        sparse_embedder=None,
+        generation_llm=None,
+        faithfulness_llm=None,
+    )
+
+
 def test_response_node_grounded_answer_filters_invalid_and_duplicate_citations():
     state = base_state(
         citations=[
@@ -75,12 +130,35 @@ def test_response_node_grounded_answer_filters_invalid_and_duplicate_citations()
             Citation(chunk_id="unknown-chunk", claim="dangling citation"),  # never retrieved
         ]
     )
-    result = response_node(None, state)["response"]
+    qdrant_client = FakeQdrantClient()
+    result = response_node(make_deps(qdrant_client, FakeOpenAIClient()), state)["response"]
 
     assert result["abstained"] is False
     assert result["answer"] == "the answer"
     assert result["confidence"] == 0.9
     assert [c["chunk_id"] for c in result["citations"]] == ["c1"]
+    assert result["cache_hit"] is False
+    # FR-6.3: a passing response writes through to query_cache.
+    assert len(qdrant_client.upserted_points) == 1
+
+
+def test_response_node_serves_cache_hit_without_retrieval():
+    cached = CacheLookupResult(
+        hit=True,
+        answer="cached answer",
+        citations=[{"chunk_id": "c1", "doc_id": "d1", "title": "t", "url": "u"}],
+        confidence=0.95,
+    )
+    result = response_node(None, base_state(cache_result=cached))["response"]
+
+    assert result == {
+        "answer": "cached answer",
+        "abstained": False,
+        "confidence": 0.95,
+        "cache_hit": True,
+        "citations": cached.citations,
+        "retrieved_chunks": [],  # cache hit skips retrieve entirely
+    }
 
 
 def test_route_after_rerank():
@@ -93,6 +171,49 @@ def test_route_after_sufficiency():
     insufficient = SufficiencyResult(sufficient=False, confidence=0.9, reasoning="not enough")
     assert _route_after_sufficiency(base_state(sufficiency=sufficient)) == "generate"
     assert _route_after_sufficiency(base_state(sufficiency=insufficient)) == "build_response"
+
+
+def test_route_after_cache_lookup():
+    assert _route_after_cache_lookup(base_state(cache_result=CacheLookupResult(hit=True))) == "build_response"
+    assert _route_after_cache_lookup(base_state(cache_result=CacheLookupResult(hit=False))) == "retrieve"
+
+
+def test_cache_lookup_node_skips_lookup_when_bypass_cache():
+    result = cache_lookup_node(None, base_state(bypass_cache=True))
+    assert result["cache_result"].hit is False
+
+
+def test_cache_lookup_node_skips_lookup_when_generation_disallowed():
+    result = cache_lookup_node(None, base_state(allow_generation=False))
+    assert result["cache_result"].hit is False
+
+
+def test_cache_lookup_node_hit_above_similarity_threshold():
+    point = FakeQdrantPoint(score=0.95, payload={"answer": "cached answer", "citations": [], "confidence": 0.9})
+    deps = make_deps(FakeQdrantClient(query_points=[point]), FakeOpenAIClient())
+
+    result = cache_lookup_node(deps, base_state())
+
+    assert result["cache_result"].hit is True
+    assert result["cache_result"].answer == "cached answer"
+    assert result["cache_result"].confidence == 0.9
+
+
+def test_cache_lookup_node_miss_below_similarity_threshold():
+    point = FakeQdrantPoint(score=0.5, payload={"answer": "cached answer", "citations": [], "confidence": 0.9})
+    deps = make_deps(FakeQdrantClient(query_points=[point]), FakeOpenAIClient())
+
+    result = cache_lookup_node(deps, base_state())
+
+    assert result["cache_result"].hit is False
+
+
+def test_cache_lookup_node_miss_when_no_points():
+    deps = make_deps(FakeQdrantClient(query_points=[]), FakeOpenAIClient())
+
+    result = cache_lookup_node(deps, base_state())
+
+    assert result["cache_result"].hit is False
 
 
 class FakeJudgeLLM:

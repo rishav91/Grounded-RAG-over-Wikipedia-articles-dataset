@@ -76,6 +76,29 @@ class UC8Case:
 
 
 @dataclass(frozen=True)
+class UC6Case:
+    """UC-6: a query answered once, then repeated verbatim under the same
+    access_context — the second call must be a cache hit (FR-6.1)."""
+
+    id: str
+    query: str
+    access_context_groups: list[str]
+
+
+@dataclass(frozen=True)
+class UC7Case:
+    """UC-7: the same query text under two different access_context values,
+    where context B lacks a group context A has — B must never receive a
+    cache hit warmed by A's answer (FR-6.2), a standing regression test
+    from M4 onward."""
+
+    id: str
+    query: str
+    access_context_groups_a: list[str]
+    access_context_groups_b: list[str]
+
+
+@dataclass(frozen=True)
 class EvalSet:
     uc1_cases: list[UC1Case]
     uc2_cases: list[UC2Case]
@@ -83,6 +106,8 @@ class EvalSet:
     uc4_cases: list[UC4Case]
     uc5_cases: list[UC5Case]
     uc8_cases: list[UC8Case]
+    uc6_cases: list[UC6Case]
+    uc7_cases: list[UC7Case]
 
 
 def load_eval_set() -> EvalSet:
@@ -94,4 +119,6 @@ def load_eval_set() -> EvalSet:
         uc4_cases=[UC4Case(**case) for case in raw["uc4_cases"]],
         uc5_cases=[UC5Case(**case) for case in raw["uc5_cases"]],
         uc8_cases=[UC8Case(**case) for case in raw["uc8_cases"]],
+        uc6_cases=[UC6Case(**case) for case in raw["uc6_cases"]],
+        uc7_cases=[UC7Case(**case) for case in raw["uc7_cases"]],
     )

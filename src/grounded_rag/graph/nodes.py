@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
+from grounded_rag.cache.cache import lookup_cache, write_cache
+from grounded_rag.cache.records import CacheLookupResult
 from grounded_rag.config import TOOL_CALL_MAX_ROUNDS
 from grounded_rag.faithfulness.faithfulness import judge_faithfulness
 from grounded_rag.generation.generate import SubmitAnswer, generate
@@ -17,6 +19,17 @@ from grounded_rag.graph.tool import build_retrieve_tool
 from grounded_rag.rerank.rerank import rerank
 from grounded_rag.retrieval.retrieve import retrieve
 from grounded_rag.sufficiency.sufficiency import check_sufficiency
+
+
+def cache_lookup_node(deps: GraphDeps, state: GraphState) -> dict:
+    # Retrieval-only requests (allow_generation=False) have no cached answer
+    # to serve — the cache only ever stores finished, faithfulness-passed
+    # answers (FR-5.3), so there's nothing for that mode to hit.
+    if state["bypass_cache"] or not state["allow_generation"]:
+        return {"cache_result": CacheLookupResult(hit=False)}
+
+    result = lookup_cache(deps.qdrant_client, deps.openai_client, state["query"], state["access_context_groups"])
+    return {"cache_result": result}
 
 
 def retrieve_node(deps: GraphDeps, state: GraphState) -> dict:
@@ -90,6 +103,22 @@ def faithfulness_node(deps: GraphDeps, state: GraphState) -> dict:
 
 
 def response_node(deps: GraphDeps, state: GraphState) -> dict:
+    cache_result = state["cache_result"]
+    if cache_result is not None and cache_result.hit:
+        # A cache hit never ran retrieve/rerank — retrieved_chunks stays
+        # empty, per API-CONTRACTS.md ("always populated when retrieval
+        # ran... not on a cache hit").
+        return {
+            "response": {
+                "answer": cache_result.answer,
+                "abstained": False,
+                "confidence": cache_result.confidence,
+                "cache_hit": True,
+                "citations": cache_result.citations,
+                "retrieved_chunks": [],
+            }
+        }
+
     retrieved_chunks = [
         {"chunk_id": chunk.chunk_id, "text": chunk.text, "score": chunk.score} for chunk in state["chunks"]
     ]
@@ -138,6 +167,21 @@ def response_node(deps: GraphDeps, state: GraphState) -> dict:
         valid_citations.append(
             {"chunk_id": chunk.chunk_id, "doc_id": chunk.doc_id, "title": chunk.title, "url": chunk.url}
         )
+
+    # FR-6.3: write-through only after a faithfulness pass (this line is
+    # only reached once `faithfulness.passed` is confirmed above); FR-5.3's
+    # "abstained answers are never cached" is therefore structural, not a
+    # separate check. Unconditional on `bypass_cache` — API-CONTRACTS.md:
+    # bypass_cache skips the *lookup*, never the write.
+    write_cache(
+        deps.qdrant_client,
+        deps.openai_client,
+        state["query"],
+        state["access_context_groups"],
+        state["draft_answer"],
+        valid_citations,
+        faithfulness.confidence,
+    )
 
     return {
         "response": {

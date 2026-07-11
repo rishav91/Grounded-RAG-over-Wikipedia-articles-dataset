@@ -144,6 +144,9 @@ first-pass `retrieve` call. Same underlying hybrid query and ACL filter as
 `retrieve` ([ARCHITECTURE.md](ARCHITECTURE.md#tiers--components)) — the tool
 schema exists so the *generator* decides if/when/how to call it, which is
 the FR8 technique being demonstrated, not a different retrieval mechanism.
+The model may issue more than one call in the same round (FR12;
+[ADR-012](ADRs.md#adr-012)) — they execute concurrently, and one call
+failing degrades that one call's result rather than the request.
 
 ```json
 {

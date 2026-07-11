@@ -19,6 +19,8 @@ contested decision below resolves against.
 | [ADR-008](#adr-008) | ACL/metadata pre-filter happens before retrieval, not after | Accepted |
 | [ADR-009](#adr-009) | Local-first deployment, cloud-ready scale path | Accepted |
 | [ADR-010](#adr-010) | Tiered (deterministic + LLM) context-sufficiency gate before generation | Accepted |
+| [ADR-011](#adr-011) | Query rewriting: single LLM call, decompose only genuinely independent sub-questions | Accepted |
+| [ADR-012](#adr-012) | Parallel tool calls with per-call partial-failure handling | Accepted |
 
 ---
 
@@ -477,3 +479,175 @@ judge prompt.
   round (`TOOL_CALL_MAX_ROUNDS`) is left to faithfulness to catch, since a
   second sufficiency gate there would just be a second abstain point
   competing with the tool-call bound's own termination logic.
+
+---
+
+<a id="adr-011"></a>
+## ADR-011 — Query rewriting: single LLM call, decompose only genuinely independent sub-questions
+
+**Context:** FR11 asks for three distinct techniques ahead of retrieval —
+decontextualize, expand, decompose — over a request contract
+([API-CONTRACTS.md](API-CONTRACTS.md)) that carries no conversation history
+(each `POST /query` is a single, self-contained turn). Decontextualization's
+usual job — resolving a reference to an earlier turn — has nothing to
+resolve against in the MVP; it's kept as part of the rewrite prompt's job
+description for forward compatibility with a future multi-turn contract, but
+isn't meaningfully exercised by anything this MVP can test. That gap is
+recorded honestly in [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions)
+rather than built around.
+
+Decompose is the technique with real teeth, and also the one that can go
+wrong silently: `UC-4` ("Alexander II of Scotland had a son who later
+became king. How did that son die?") is multi-hop, but its second hop's
+subject is only known *after* the first hop's chunk is read — there is no
+sub-query for "how did that son die" that doesn't already require the
+answer. Naively decomposing every multi-part-looking question into parallel
+sub-queries would silently break M3's `UC-4` regression test (`FR-4.2`
+expects the reactive retrieval-tool call to still fire exactly once) by
+routing that case's second hop through a fabricated, entity-less sub-query
+that the retrieval index simply won't match.
+
+**Decision:** One `rewrite_query` node, inserted after `cache_lookup` on a
+cache **miss** (not before — keeping the cache key on the literal query text
+means a verbatim-repeat lookup, `UC-6`, isn't perturbed by a non-deterministic
+LLM rewrite of it) and before `retrieve`. One structured-output LLM call
+(reusing `deps.generation_llm` — a generative rewrite, not a judge, so it
+takes the generation role rather than `check_sufficiency`'s judge role)
+produces:
+- `rewritten_query`: a decontextualized/expanded standalone version of the
+  question, used in place of the raw query for the first-pass retrieval.
+- `sub_queries`: zero or more **independently retrievable** sub-questions,
+  capped at `QUERY_REWRITE_MAX_SUB_QUERIES`. The prompt explicitly instructs
+  the model to leave this empty whenever a later part depends on an entity
+  or fact that can only be discovered by first retrieving an earlier part —
+  that class of multi-hop keeps going through `FR8`'s reactive tool-call
+  loop unchanged, not through this node.
+
+`retrieve` then fires `rewritten_query` and every `sub_queries` entry
+concurrently (`ADR-012`'s partial-failure handling applies to the
+sub-queries specifically — see that ADR), merging the results by
+`chunk_id` (max score wins on a collision) into one candidate set before
+rerank, so a genuinely independent bundled question (e.g. "what is
+`[Article-A]` known for, and what is `[Article-B]` known for") gets both
+articles' chunks in the first pass instead of one fused, potentially
+diluted embedding search.
+
+**Alternatives:**
+- *Always decompose multi-part-looking questions into sub-queries* —
+  simpler prompt, no independence judgment call. Rejected: breaks `UC-4` as
+  described above, and more generally conflates "the question has multiple
+  clauses" with "the clauses are independently searchable," which they are
+  not for genuinely sequential multi-hop.
+- *Three separate LLM calls (decontextualize, expand, decompose)* — cleaner
+  single-responsibility prompts. Rejected: three round-trips on every cache
+  miss for a P1 technique the MVP eval set exercises lightly is a latency
+  and cost multiplier without an accuracy case to justify it here; revisit
+  if any one sub-task's quality needs isolated tuning.
+- *Run rewrite before `cache_lookup`, cache on the rewritten query* — could
+  raise the semantic cache's hit rate (paraphrases collapse to the same
+  rewritten form) — the more ambitious framing of "rewriting helps caching
+  too." Rejected for the MVP: makes `UC-6`/`UC-7`'s cache-safety tests
+  depend on rewrite-LLM determinism, which isn't guaranteed run to run;
+  revisit once the cache's real hit rate is measured against real traffic
+  (`REQUIREMENTS.md` Open assumptions already flags that measurement as
+  outstanding).
+
+**Consequences:**
+- `+` Genuinely independent bundled questions get both/all parts' evidence
+  in the first-pass candidate set, without needing `FR8`'s reactive loop to
+  discover it — cheaper (one round trip, not two) for the class of
+  multi-part question decompose is actually suited to.
+- `+` `UC-4`-style sequential multi-hop is unaffected: the rewrite prompt's
+  independence judgment routes it to `sub_queries: []`, so `FR8`'s tool-call
+  path still carries that case exactly as M3 built it — verified by
+  re-running `eval_m3.py` unchanged after this node was wired in.
+- `+` Fails open on its own LLM call failing (mirrors `ADR-010`'s tier-2
+  fallback): `rewritten_query` defaults to the raw query and `sub_queries`
+  to `[]`, never blocking retrieval on a transient rewrite-LLM outage.
+- `−` A fourth potential LLM call on the hot path (after `check_sufficiency`,
+  `generate`, `faithfulness`), on every cache miss unconditionally (not
+  gated to an ambiguous tier the way `ADR-010`'s is) — accepted because
+  rewriting has to run before retrieval even happens, so there's no
+  retrieval-quality signal yet to gate it on the way `ADR-010` gates its own
+  LLM call.
+- `−` Decontextualization is effectively unexercised by this MVP's
+  single-turn contract — flagged, not hidden, in
+  [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions).
+
+---
+
+<a id="adr-012"></a>
+## ADR-012 — Parallel tool calls with per-call partial-failure handling
+
+**Context:** `generate` (`ADR-001`, `ADR-007`) has bound `retrieve_chunks`
+and `SubmitAnswer` with `parallel_tool_calls=False` since M3, deliberately —
+the M3 code comment on that line spells out why: `execute_tool_node` only
+ever answered `tool_calls[0]`, so a provider returning two calls in one
+`AIMessage` would leave the second `tool_call_id` without a response
+message, which OpenAI's API rejects on the next turn. FR12 asks for the
+opposite: the generator should be able to fire more than one retrieval in a
+single round (e.g. two independent follow-up lookups it decides it needs
+mid-turn) and have a single one of them failing degrade gracefully rather
+than take down the request.
+
+**Decision:** Flip `parallel_tool_calls=True` on the `generate` binding.
+`GenerationResult.tool_calls` becomes a list (`ToolCallRequest`, one per
+`retrieve_chunks` call in the round; capped at
+`MAX_PARALLEL_RETRIEVE_CALLS`), replacing the old single `tool_query`/
+`tool_top_k` fields — a round is still exactly one increment of
+`tool_call_count` against `TOOL_CALL_MAX_ROUNDS` regardless of how many
+calls it contains, since the round-count bound (`FR-4.2`) and the
+within-round call count are orthogonal knobs. If any call in the round is
+`SubmitAnswer`, that one wins and the round finishes immediately — the
+generator is never supposed to mix "I'm answering" with "I need more
+evidence" in one turn, so the other calls (if any) are simply never invoked
+and never get a `ToolMessage`, which is safe precisely because a finished
+round means no further `llm.invoke` happens against that message history.
+
+`execute_tool_node` runs every `retrieve_chunks` call in the round
+concurrently (`ThreadPoolExecutor`) and always emits exactly one
+`ToolMessage` per `tool_call_id`, win or lose: a call whose `retrieve()`
+raises gets a `ToolMessage` reporting the failure in its content instead of
+chunks, and the round proceeds with whatever the surviving calls returned —
+this is the same "one call's failure doesn't obligate failing the whole
+request" property `ADR-011`'s sub-query fan-out gets, applied to the
+model-driven fan-out instead of the rewrite-driven one. This is scoped
+narrowly: it does **not** change the hard-fail behavior of the single
+first-pass `retrieve` call in `ARCHITECTURE.md`'s failure-mode table — that
+call has no sibling to fall back on, so a real Qdrant/embedding outage there
+is still a request failure, not a degradation.
+
+**Alternatives:**
+- *Keep `parallel_tool_calls=False`, let the model ask for one lookup per
+  round and rely on `TOOL_CALL_MAX_ROUNDS` for multi-round follow-ups* — the
+  status quo. Rejected as the whole point of FR12: it demonstrates no
+  parallelism and has nothing for partial-failure handling to apply to.
+- *Fail the whole round if any one call raises* — simplest error handling.
+  Rejected: directly contradicts FR12's explicit ask ("a single failure
+  degrades gracefully"), and throws away perfectly good chunks the
+  surviving calls already fetched.
+- *Retry a failed call once before giving up* — could paper over a
+  transient blip. Rejected for the MVP: adds latency to the common case to
+  handle a failure mode this project already treats as gracefully
+  degradable rather than worth masking; revisit if real traffic shows
+  transient single-call failures are common enough to matter.
+
+**Consequences:**
+- `+` A deliberately-failed call (verified by a unit test injecting an
+  exception into one of two concurrent `retrieve_chunks` calls) never
+  aborts the request — the surviving call's chunks still reach `generate`,
+  and the model can still finish with `SubmitAnswer` on partial evidence,
+  matching `PRD.md §9`'s M5 exit criterion verbatim.
+- `+` Two independent follow-up lookups in one round cost one round-trip's
+  wall-clock latency instead of two sequential ones (bounded by
+  `MAX_PARALLEL_RETRIEVE_CALLS`, not open-ended).
+- `−` `GenerationResult`'s shape change (`tool_query`/`tool_top_k` ->
+  `tool_calls: list[ToolCallRequest]`) is a breaking change to every caller
+  of `generate()` — contained to `graph/nodes.py` and the test suite, no
+  external contract (`API-CONTRACTS.md`'s response shape is unaffected;
+  this is internal to the agentic loop).
+- `−` `execute_tool_node`'s dedup logic (a chunk already known to `state`
+  should not be re-added) now also has to dedup *across* the concurrently
+  merged calls of the same round, not just against prior rounds — handled
+  by the same score-keeping merge helper `ADR-011`'s sub-query fan-out
+  uses, rather than two divergent dedup implementations.

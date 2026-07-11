@@ -59,8 +59,8 @@ on the labeled eval set (`UC-1`..`UC-8`) in
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
-| FR-7.1 | Query rewriting decontextualizes/expands/decomposes multi-hop queries before retrieval | P1 | Deferred — acceptance criteria to be defined alongside M5 design ([ROADMAP.md](ROADMAP.md)) |
-| FR-7.2 | Parallel tool/retrieval calls with partial-failure handling — one failure degrades gracefully | P1 | Deferred — acceptance criteria to be defined alongside M5 design |
+| FR-7.1 | Query rewriting decontextualizes/expands/decomposes multi-hop queries before retrieval | P1 | One LLM call (`rewrite_query` node, `ADR-011`), run on every cache miss before `retrieve`, produces a decontextualized/expanded `rewritten_query` plus zero or more `sub_queries` — populated only when the question decomposes into genuinely independently-retrievable parts, never a sequential hop whose subject is only known after an earlier hop resolves (that stays on FR8's reactive tool-call path). All sub-queries retrieve concurrently with `rewritten_query` and merge (score-deduped) into the first-pass candidate set. Verified live: a bundled independent-facts case (UC-9) recalls both parts' source chunks in the first pass, without the reactive tool call firing; M3's UC-4 (sequential multi-hop) re-verified unchanged (`sub_queries: []`, tool call still fires exactly once). |
+| FR-7.2 | Parallel tool/retrieval calls with partial-failure handling — one failure degrades gracefully | P1 | `generate` binds tools with `parallel_tool_calls=True` (`ADR-012`); multiple `retrieve_chunks` calls in one round (capped at `MAX_PARALLEL_RETRIEVE_CALLS`) execute concurrently, still counted as one round against `TOOL_CALL_MAX_ROUNDS`. A call whose retrieval raises gets a failure `ToolMessage` on its own `tool_call_id` instead of aborting the round; the surviving calls' chunks still reach the model. Verified by a unit test injecting a failure into one of two concurrent calls: the surviving call's chunks are merged into state, no exception propagates, and the request completes. |
 
 ### FR-8.x — Observability & feedback (FR13, FR14)
 
@@ -216,6 +216,13 @@ real measurement exists:
   real measurement is a Stage 2 scale-roadmap item
   ([ROADMAP.md](ROADMAP.md#scale-stages)), not something the 1K-doc MVP's
   low query volume can produce.
+- **FR-7.1 decontextualization is effectively unexercised by this MVP:**
+  `POST /query`'s contract ([API-CONTRACTS.md](API-CONTRACTS.md)) carries no
+  conversation history — every request is a single, self-contained turn —
+  so `rewrite_query`'s decontextualization job (resolving a reference to an
+  earlier turn) has nothing to resolve against. Kept in the rewrite prompt
+  for forward compatibility with a future multi-turn contract (`ADR-011`),
+  not something this MVP's eval set can meaningfully measure.
 - **Capacity sizing's sparse-vector and payload-text estimates:** rough
   approximations pending real chunk statistics from M0 (see
   [Capacity sizing](#capacity-sizing) above).

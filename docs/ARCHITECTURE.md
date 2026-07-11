@@ -9,8 +9,8 @@ alternatives.
 1. **Verifiable-or-abstain** (the governing principle) — every node that can
    produce or influence the final answer is downstream of, or routes into,
    the faithfulness gate (`faithfulness` node). Nothing — not the cache, not
-   the retrieval tool, not a future query-rewrite or parallel-tool-call path
-   — returns an answer that skipped it.
+   the retrieval tool, not the query-rewrite or parallel-tool-call path
+   (`ADR-011`, `ADR-012`) — returns an answer that skipped it.
 2. **ACL is structural, not a convention.** Permission filtering happens
    inside the retrieval query (`ADR-008`) and inside the cache key
    (`ADR-005`) — never as an afterthought filter applied to output after the
@@ -56,16 +56,18 @@ flowchart TB
         Client["API caller"]
         API["POST /query"]
         CacheLookup["cache_lookup node"]
-        Retrieve["retrieve node\nhybrid + ACL/metadata filter"]
+        Rewrite["rewrite_query node\nLLM: decontextualize/expand/decompose"]
+        Retrieve["retrieve node\nhybrid + ACL/metadata filter,\nparallel across rewrite's sub_queries"]
         Rerank["rerank node\nCohere Rerank API"]
         Sufficiency["check_sufficiency node\ntiered score-gate + LLM judge"]
-        Generate["generate node\nLLM + bound retrieval tool"]
+        Generate["generate node\nLLM + bound retrieval tool,\nparallel tool calls"]
         Faith["faithfulness node\nLLM-as-judge"]
         Response["response node"]
 
         Client --> API --> CacheLookup
         CacheLookup -->|hit| Response
-        CacheLookup -->|miss| Retrieve
+        CacheLookup -->|miss| Rewrite
+        Rewrite --> Retrieve
         Retrieve --> Rerank --> Sufficiency
         Sufficiency -->|sufficient| Generate
         Sufficiency -->|insufficient: abstain| Response
@@ -89,20 +91,22 @@ flowchart TB
 | Qdrant `articles` collection | Dense + sparse vector per chunk; payload carries `doc_type`/`acl_tags`/dates; one hybrid query does fusion + payload filter | Qdrant | FR2, FR3; [ADR-004](ADRs.md#adr-004), [ADR-008](ADRs.md#adr-008) |
 | Qdrant `query_cache` collection | Semantic cache: query embedding → cached answer + citations; payload carries `acl_signature` and a write timestamp for TTL | Qdrant, second collection | FR9; [ADR-005](ADRs.md#adr-005) |
 | `cache_lookup` node | Embeds the incoming query, searches `query_cache` filtered by `acl_signature`, returns hit/miss | LangGraph node | FR9 |
-| `retrieve` node | Hybrid query against `articles`, filtered by ACL/metadata before fusion | Plain Python function through M1/M2 (`src/grounded_rag/retrieval/retrieve.py`); wrapped as a LangGraph node at M3, when the retrieval-tool cycle first needs the graph | FR2, FR3 |
-| Retrieval tool | The same hybrid+filter query as `retrieve`, exposed as a typed LangGraph tool the `generate` node can call mid-turn | LangGraph tool | FR8 |
+| `rewrite_query` node | One LLM call: decontextualize/expand the query, decompose into independently-retrievable `sub_queries` when genuinely parallel (never a sequential hop) | LangGraph node + configured LLM | FR11; [ADR-011](ADRs.md#adr-011) |
+| `retrieve` node | Hybrid query against `articles`, filtered by ACL/metadata before fusion; fires concurrently across the rewritten query and any `sub_queries`, merging by `chunk_id` | Plain Python function through M1/M2 (`src/grounded_rag/retrieval/retrieve.py`); wrapped as a LangGraph node at M3, when the retrieval-tool cycle first needs the graph | FR2, FR3, FR11 |
+| Retrieval tool | The same hybrid+filter query as `retrieve`, exposed as a typed LangGraph tool the `generate` node can call mid-turn — possibly more than once per round, executed concurrently | LangGraph tool | FR8, FR12; [ADR-012](ADRs.md#adr-012) |
 | `rerank` node | Calls the Cohere Rerank API over the fused candidate set | LangGraph node + Cohere API | FR4; [ADR-003](ADRs.md#adr-003) |
 | `check_sufficiency` node | Tiered score-gate + LLM judge deciding whether the reranked chunks are adequate to attempt an answer; short-circuits to abstain, skipping `generate`/`faithfulness`, on obviously-hopeless context | LangGraph node + (sometimes) configured LLM | FR15; [ADR-010](ADRs.md#adr-010) |
-| `generate` node | Calls the configured LLM with the top-k context, a citation-constrained prompt, and the retrieval tool bound | LangGraph node + configured LLM | FR5, FR8; [ADR-001](ADRs.md#adr-001), [ADR-007](ADRs.md#adr-007) |
+| `generate` node | Calls the configured LLM with the top-k context, a citation-constrained prompt, and the retrieval tool bound with `parallel_tool_calls=True`; a failed concurrent call degrades to a failure `ToolMessage` on its own `tool_call_id` rather than aborting the round | LangGraph node + configured LLM | FR5, FR8, FR12; [ADR-001](ADRs.md#adr-001), [ADR-007](ADRs.md#adr-007), [ADR-012](ADRs.md#adr-012) |
 | `faithfulness` node | LLM-as-judge scores each cited claim against its cited chunk and whether the answer addresses the question; decides abstain | LangGraph node + configured LLM | FR6, FR7, FR-5.4; [ADR-006](ADRs.md#adr-006) |
 | `response` node | Formats the structured API response; writes through to `query_cache` only after a faithfulness pass | LangGraph node | FR7, FR9 |
 | API layer | Accepts `POST /query`, runs the compiled graph, returns the structured response | HTTP service (Python) | [API-CONTRACTS.md](API-CONTRACTS.md) |
 
 There is no intent router in this graph (unlike a multi-path agent design) —
-every query takes the same cache → retrieve → rerank → check_sufficiency →
-generate → faithfulness shape. The only branching is cache hit/miss, the
-sufficiency sufficient/insufficient split, the `generate` node's optional
-tool call back into `retrieve`, and the faithfulness pass/fail split.
+every query takes the same cache → rewrite_query → retrieve → rerank →
+check_sufficiency → generate → faithfulness shape. The only branching is
+cache hit/miss, the sufficiency sufficient/insufficient split, the
+`generate` node's optional tool call(s) back into `retrieve`, and the
+faithfulness pass/fail split.
 
 ## Key flows
 
@@ -113,6 +117,7 @@ sequenceDiagram
     actor Caller
     participant API as Query API
     participant CL as cache_lookup
+    participant RW as rewrite_query
     participant Ret as retrieve
     participant Rerank as rerank (Cohere)
     participant Suff as check_sufficiency
@@ -127,8 +132,10 @@ sequenceDiagram
         Cache-->>CL: cached answer + citations
         CL-->>Caller: cached response
     else Cache miss
-        CL->>Ret: proceed
-        Ret->>Ret: hybrid search, ACL/metadata payload filter
+        CL->>RW: proceed
+        RW->>RW: decontextualize/expand; decompose only if\nsub-questions are independently retrievable
+        RW->>Ret: rewritten_query + sub_queries
+        Ret->>Ret: hybrid search per query, concurrently;\nACL/metadata payload filter; merge by chunk_id
         Ret->>Rerank: fused candidate set
         Rerank-->>Suff: precise top-k
         Suff->>Suff: score-gate, LLM judge only if ambiguous
@@ -138,7 +145,7 @@ sequenceDiagram
         else Context sufficient
             Suff-->>Gen: proceed
             opt First pass insufficient
-                Gen->>Ret: call retrieval tool
+                Gen->>Ret: call retrieval tool (possibly >1 call, concurrently;\na failed call degrades, doesn't abort the round)
                 Ret-->>Gen: additional chunks, same ACL filter
             end
             Gen-->>Faith: draft answer + citations
@@ -157,16 +164,20 @@ sequenceDiagram
 
 **Cache hit:** `cache_lookup` embeds the query, searches `query_cache`
 filtered to the caller's `acl_signature`, and returns the cached answer
-directly — `retrieve`, `rerank`, `check_sufficiency`, `generate`, and
-`faithfulness` never run.
+directly — `rewrite_query`, `retrieve`, `rerank`, `check_sufficiency`,
+`generate`, and `faithfulness` never run.
 
-**Cache miss, context insufficient:** `retrieve` → `rerank` →
-`check_sufficiency` determines the retrieved context is inadequate (FR15) →
-`response` returns `abstained: true` directly, without ever running
-`generate` or `faithfulness` — the cheaper of the two abstain paths.
+**Cache miss, context insufficient:** `rewrite_query` → `retrieve` →
+`rerank` → `check_sufficiency` determines the retrieved context is
+inadequate (FR15) → `response` returns `abstained: true` directly, without
+ever running `generate` or `faithfulness` — the cheaper of the two abstain
+paths.
 
-**Cache miss, grounded:** `retrieve` → `rerank` → `check_sufficiency` passes
-→ `generate` (optionally calling the retrieval tool mid-turn) →
+**Cache miss, grounded:** `rewrite_query` (decontextualize/expand, decompose
+into `sub_queries` only if independently retrievable, FR11) → `retrieve`
+(concurrently across the rewritten query and any `sub_queries`) → `rerank`
+→ `check_sufficiency` passes → `generate` (optionally calling the retrieval
+tool mid-turn, possibly with more than one concurrent call, FR12) →
 `faithfulness` passes (both groundedness and relevance, FR-5.4) → `response`
 writes through to `query_cache` and returns the answer.
 
@@ -247,6 +258,8 @@ load-tested guarantee.
 | Qdrant unreachable (`query_cache`) | Cache lookup or write-through fails | Treat as a cache miss and proceed through the full read path. Caching is a latency/cost optimization, never a correctness dependency — the read path must never block on cache availability |
 | Cohere Rerank API down or rate-limited | `rerank` node call fails | Degrade to fusion-only ranking — pass the fused top-k straight to `check_sufficiency`/`generate` rather than failing the request (documented in [ADR-003](ADRs.md#adr-003)); `check_sufficiency`'s tier-1 score gate is skipped in this case since fusion-only scores aren't on Cohere's 0-1 scale ([ADR-010](ADRs.md#adr-010)) |
 | OpenAI embeddings API down | Can't embed the incoming query (or, at ingestion time, a document) | Query-time: fail the request — there is no retrieval without a query embedding, a hard dependency, not a degradable one. Ingestion-time: blocks that ingestion run only, not a live request |
+| Configured LLM down/erroring — `rewrite_query` | Rewrite LLM call fails | Fail **open** — default `rewritten_query` to the raw query and `sub_queries` to `[]`, proceed to `retrieve` unchanged. A rewrite failure must never block retrieval ([ADR-011](ADRs.md#adr-011)) |
+| A `sub_queries` entry's (or a concurrent `retrieve_chunks` tool call's) retrieval fails | One leg of a concurrent fan-out raises | Degrades gracefully — drop that one leg's results, proceed with whatever the other concurrent calls returned ([ADR-011](ADRs.md#adr-011), [ADR-012](ADRs.md#adr-012)). Scoped narrowly to the parallel fan-out: the single primary `retrieve` call above has no sibling to fall back on and is still a hard failure |
 | Configured LLM down/erroring — `check_sufficiency` | Tier-2 judge call fails | Fail **open** — default to `sufficient=True` and proceed to `generate`, never block a request that might otherwise succeed. Distinct from `faithfulness`'s fail-closed behavior below: sufficiency is a cost-saving pre-filter, not the safety-critical gate — that's still faithfulness ([ADR-010](ADRs.md#adr-010)) |
 | Configured LLM down/erroring — `generate` | Generation call fails | Bounded retry with backoff; on exhaustion, return an explicit error distinct from `abstained` |
 | Configured LLM down/erroring — `faithfulness` | Judge call fails | Same bounded retry; on exhaustion, default to **abstain**, never to an unverified pass — consistent with the governing principle: never skip the gate, never assume a pass |

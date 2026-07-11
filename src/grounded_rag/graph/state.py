@@ -1,0 +1,43 @@
+"""`GraphState`: the state object threaded through every M3 node (ADR-001).
+
+A consistent state object is also what FR13's future per-request trace would
+hang off directly (see ARCHITECTURE.md's `+` consequence for `ADR-001`).
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+
+from grounded_rag.faithfulness.records import FaithfulnessResult
+from grounded_rag.generation.records import Citation
+from grounded_rag.retrieval.records import RetrievedChunk
+
+
+class GraphState(TypedDict):
+    # Request inputs (API-CONTRACTS.md POST /query), fixed for the request.
+    query: str
+    access_context_groups: list[str]
+    doc_type: str | None
+    date_range: dict[str, str] | None
+    top_k: int
+    allow_generation: bool
+
+    # Retrieval/rerank output — grows if the retrieval tool fires (FR8).
+    chunks: list[RetrievedChunk]
+
+    # The generate node's tool-call conversation (FR8's ReAct-style loop).
+    messages: Annotated[list[BaseMessage], add_messages]
+    tool_call_count: int
+
+    # generate's terminal output (FR5).
+    draft_answer: str | None
+    citations: list[Citation]
+
+    # faithfulness's verdict (FR6, FR7).
+    faithfulness: FaithfulnessResult | None
+
+    # response's final API-CONTRACTS.md-shaped dict.
+    response: dict

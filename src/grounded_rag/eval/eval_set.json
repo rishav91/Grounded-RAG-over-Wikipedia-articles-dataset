@@ -85,5 +85,41 @@
       "restricted_doc_id": "1201",
       "expect_excluded": false
     }
+  ],
+  "uc4_cases": [
+    {
+      "id": "uc4-alexander-ii-son-death",
+      "query": "Alexander II of Scotland had a son who later became king. How did that son die?",
+      "access_context_groups": ["public"],
+      "first_pass_doc_id": "1594",
+      "second_hop_doc_id": "1596"
+    }
+  ],
+  "uc5_cases": [
+    {
+      "id": "uc5-vietnamese-pho",
+      "query": "What ingredients are used in traditional Vietnamese pho?",
+      "access_context_groups": ["public"]
+    }
+  ],
+  "uc8_cases": [
+    {
+      "id": "uc8-alexander-fleming",
+      "query": "What did Alexander Fleming discover, and in what year?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "1937"
+    },
+    {
+      "id": "uc8-analytical-engine",
+      "query": "Who designed the Analytical Engine, and what was it a successor to?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "1271"
+    },
+    {
+      "id": "uc8-antonio-salieri",
+      "query": "What was Antonio Salieri's profession, and in which period was he active?",
+      "access_context_groups": ["public"],
+      "expected_doc_id": "2241"
+    }
   ]
 }

@@ -124,7 +124,7 @@ later change to caching, retrieval, or the API contract.
 
 ## M5 — Phase 2 techniques (FR11, FR12)
 
-- [ ] **M5 status: not started**
+- [x] **M5 status: done** — merged to `main`, verified (`scripts/eval_m5.py`: FR-7.1 decompose mechanism PASS at 100% across every run (sub_queries produced, both articles recalled in the first pass, reactive tool call never needed); UC-4 sequential multi-hop unaffected; FR-7.2 partial-failure handling verified by unit test — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions) for the separately-measured, lower answered-both-parts generation rate)
 
 **Goal:** the two deferred techniques, added once the MVP's core loop
 (M0–M4) is proven stable — deliberately last among the "designed for"
@@ -132,16 +132,23 @@ items because both extend the `generate` node's control flow, which is
 easiest to get wrong if the simpler path beneath it isn't already trusted.
 
 **Ships:**
-- [ ] Query rewriting (FR11): decontextualize/expand/decompose before retrieval
-- [ ] Parallel tool calls with partial-failure handling (FR12)
+- [x] Query rewriting (FR11): decontextualize/expand/decompose before retrieval
+- [x] Parallel tool calls with partial-failure handling (FR12)
 
 **Unlocks:** nothing inside the MVP depends on this — it's explicitly
 designed-for/sequenced-in rather than required for the MVP to be considered
 done (`PRD.md §2.3`).
 
-**Verify:** acceptance criteria for FR-7.1/FR-7.2 are deferred to this
-phase's own design pass, not pinned in advance (`REQUIREMENTS.md`) — writing
-them now would invent detail this suite doesn't have yet.
+**Verify:** UC-9 (bundled, genuinely independent multi-part query) —
+`rewrite_query` decomposes it and `retrieve` recalls both parts' source
+articles in the first pass, without needing FR8's reactive tool call; M3's
+UC-4 (sequential multi-hop, where a sub-query can't be independently
+resolved) is re-verified unaffected. FR-7.2's partial-failure handling — a
+deliberately failed concurrent tool call degrades gracefully instead of
+failing the request — is verified by a unit test injecting the failure
+directly (`ADR-012` explains why: forcing one of several concurrent live
+API calls to fail on demand isn't reproducible through the live eval
+harness the way UC-9 is).
 
 ## M6 — Observability and feedback (FR13, FR14)
 

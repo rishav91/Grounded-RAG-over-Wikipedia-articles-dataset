@@ -1,7 +1,8 @@
 """`build_graph`: wires the M3 read path (ADR-001).
 
 Matches ARCHITECTURE.md's query-flow diagram minus `cache_lookup` (M4):
-retrieve -> rerank -> (allow_generation? generate : response);
+retrieve -> rerank -> (allow_generation? check_sufficiency : response);
+check_sufficiency -> (sufficient? generate : response) (FR15; ADR-010);
 generate -> (tool call? execute_tool : faithfulness); execute_tool -> generate;
 faithfulness -> response -> END.
 """
@@ -23,7 +24,11 @@ from grounded_rag.graph.state import GraphState
 # "judge_faithfulness" not "faithfulness") — langgraph rejects a node id that
 # collides with a state key.
 def _route_after_rerank(state: GraphState) -> str:
-    return "generate" if state["allow_generation"] else "build_response"
+    return "check_sufficiency" if state["allow_generation"] else "build_response"
+
+
+def _route_after_sufficiency(state: GraphState) -> str:
+    return "generate" if state["sufficiency"].sufficient else "build_response"
 
 
 def _route_after_generate(state: GraphState) -> str:
@@ -38,6 +43,7 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph:
     graph = StateGraph(GraphState)
     graph.add_node("retrieve", partial(nodes.retrieve_node, deps))
     graph.add_node("rerank", partial(nodes.rerank_node, deps))
+    graph.add_node("check_sufficiency", partial(nodes.check_sufficiency_node, deps))
     graph.add_node("generate", partial(nodes.generate_node, deps))
     graph.add_node("execute_tool", partial(nodes.execute_tool_node, deps))
     graph.add_node("judge_faithfulness", partial(nodes.faithfulness_node, deps))
@@ -46,7 +52,10 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph:
     graph.add_edge(START, "retrieve")
     graph.add_edge("retrieve", "rerank")
     graph.add_conditional_edges(
-        "rerank", _route_after_rerank, {"generate": "generate", "build_response": "build_response"}
+        "rerank", _route_after_rerank, {"check_sufficiency": "check_sufficiency", "build_response": "build_response"}
+    )
+    graph.add_conditional_edges(
+        "check_sufficiency", _route_after_sufficiency, {"generate": "generate", "build_response": "build_response"}
     )
     graph.add_conditional_edges(
         "generate", _route_after_generate, {"execute_tool": "execute_tool", "judge_faithfulness": "judge_faithfulness"}

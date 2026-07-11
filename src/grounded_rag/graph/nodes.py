@@ -1,5 +1,5 @@
-"""LangGraph node wrappers around the plain retrieve/rerank/generate/
-faithfulness functions (ADR-001). Each node is `(deps, state) -> dict`,
+"""LangGraph node wrappers around the plain retrieve/rerank/check_sufficiency/
+generate/faithfulness functions (ADR-001). Each node is `(deps, state) -> dict`,
 bound to a `GraphDeps` via `functools.partial` in `build.py`.
 """
 
@@ -16,6 +16,7 @@ from grounded_rag.graph.state import GraphState
 from grounded_rag.graph.tool import build_retrieve_tool
 from grounded_rag.rerank.rerank import rerank
 from grounded_rag.retrieval.retrieve import retrieve
+from grounded_rag.sufficiency.sufficiency import check_sufficiency
 
 
 def retrieve_node(deps: GraphDeps, state: GraphState) -> dict:
@@ -33,7 +34,15 @@ def retrieve_node(deps: GraphDeps, state: GraphState) -> dict:
 
 def rerank_node(deps: GraphDeps, state: GraphState) -> dict:
     result = rerank(deps.cohere_client, state["query"], state["chunks"], top_k=state["top_k"])
-    return {"chunks": result.chunks}
+    return {"chunks": result.chunks, "reranked": result.reranked}
+
+
+def check_sufficiency_node(deps: GraphDeps, state: GraphState) -> dict:
+    # Reuses the faithfulness judge model — this is the same "judge" role,
+    # not a new independently-configurable knob (ADR-007's spirit: no new
+    # config surface unless there's a stated need for one).
+    result = check_sufficiency(deps.faithfulness_llm, state["query"], state["chunks"], state["reranked"])
+    return {"sufficiency": result}
 
 
 def generate_node(deps: GraphDeps, state: GraphState) -> dict:
@@ -97,6 +106,10 @@ def response_node(deps: GraphDeps, state: GraphState) -> dict:
             }
         }
 
+    # faithfulness is None either because check_sufficiency short-circuited
+    # before generate/faithfulness ever ran (FR15; ADR-010), or — should the
+    # graph reach here in some other unexpected way — because it just wasn't
+    # set. Either way, no verified pass exists, so abstain.
     faithfulness = state["faithfulness"]
     if faithfulness is None or not faithfulness.passed:
         return {

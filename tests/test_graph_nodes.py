@@ -3,9 +3,12 @@ from langchain_core.messages import AIMessage
 from grounded_rag.faithfulness.records import FaithfulnessResult
 from grounded_rag.generation.generate import RETRIEVE_TOOL_NAME, SUBMIT_ANSWER_TOOL_NAME
 from grounded_rag.generation.records import Citation
-from grounded_rag.graph.build import _route_after_generate, _route_after_rerank
-from grounded_rag.graph.nodes import response_node
+from grounded_rag.graph.build import _route_after_generate, _route_after_rerank, _route_after_sufficiency
+from grounded_rag.graph.deps import GraphDeps
+from grounded_rag.graph.nodes import check_sufficiency_node, response_node
 from grounded_rag.retrieval.records import RetrievedChunk
+from grounded_rag.sufficiency.records import SufficiencyResult
+from grounded_rag.sufficiency.sufficiency import SufficiencyJudgment
 
 
 def make_chunk(chunk_id: str) -> RetrievedChunk:
@@ -30,11 +33,13 @@ def base_state(**overrides) -> dict:
         "top_k": 5,
         "allow_generation": True,
         "chunks": [make_chunk("c1")],
+        "reranked": True,
+        "sufficiency": SufficiencyResult(sufficient=True, confidence=0.9, reasoning="ok"),
         "messages": [],
         "tool_call_count": 0,
         "draft_answer": "the answer",
         "citations": [Citation(chunk_id="c1", claim="a claim")],
-        "faithfulness": FaithfulnessResult(passed=True, confidence=0.9, reasoning="ok"),
+        "faithfulness": FaithfulnessResult(passed=True, confidence=0.9, reasoning="ok", answers_question=True),
         "response": {},
     }
     state.update(overrides)
@@ -79,8 +84,44 @@ def test_response_node_grounded_answer_filters_invalid_and_duplicate_citations()
 
 
 def test_route_after_rerank():
-    assert _route_after_rerank(base_state(allow_generation=True)) == "generate"
+    assert _route_after_rerank(base_state(allow_generation=True)) == "check_sufficiency"
     assert _route_after_rerank(base_state(allow_generation=False)) == "build_response"
+
+
+def test_route_after_sufficiency():
+    sufficient = SufficiencyResult(sufficient=True, confidence=0.9, reasoning="ok")
+    insufficient = SufficiencyResult(sufficient=False, confidence=0.9, reasoning="not enough")
+    assert _route_after_sufficiency(base_state(sufficiency=sufficient)) == "generate"
+    assert _route_after_sufficiency(base_state(sufficiency=insufficient)) == "build_response"
+
+
+class FakeJudgeLLM:
+    def __init__(self, judgment):
+        self._judgment = judgment
+
+    def with_structured_output(self, schema):
+        return self
+
+    def invoke(self, messages):
+        return self._judgment
+
+
+def test_check_sufficiency_node_reuses_faithfulness_llm():
+    judgment = SufficiencyJudgment(sufficient=False, confidence=0.8, missing_aspects=["x"], reasoning="thin context")
+    deps = GraphDeps(
+        qdrant_client=None,
+        openai_client=None,
+        cohere_client=None,
+        sparse_embedder=None,
+        generation_llm=None,
+        faithfulness_llm=FakeJudgeLLM(judgment),
+    )
+    # reranked=False skips the score-gate tiers entirely, forcing the LLM
+    # judge — proves the node wires deps.faithfulness_llm through correctly.
+    result = check_sufficiency_node(deps, base_state(reranked=False))
+
+    assert result["sufficiency"].sufficient is False
+    assert result["sufficiency"].checked_by_llm is True
 
 
 def test_route_after_generate_retrieve_call_goes_to_execute_tool():

@@ -29,6 +29,8 @@ def run_query(
         "top_k": top_k,
         "allow_generation": allow_generation,
         "chunks": [],
+        "reranked": False,
+        "sufficiency": None,
         "messages": [],
         "tool_call_count": 0,
         "draft_answer": None,

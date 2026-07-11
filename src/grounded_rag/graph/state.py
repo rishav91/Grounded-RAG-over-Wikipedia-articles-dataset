@@ -14,6 +14,7 @@ from langgraph.graph.message import add_messages
 from grounded_rag.faithfulness.records import FaithfulnessResult
 from grounded_rag.generation.records import Citation
 from grounded_rag.retrieval.records import RetrievedChunk
+from grounded_rag.sufficiency.records import SufficiencyResult
 
 
 class GraphState(TypedDict):
@@ -27,6 +28,10 @@ class GraphState(TypedDict):
 
     # Retrieval/rerank output — grows if the retrieval tool fires (FR8).
     chunks: list[RetrievedChunk]
+    reranked: bool  # False if the Cohere call failed and rerank fell back to fusion order (FR-3.2)
+
+    # check_sufficiency's verdict on the first-pass chunks (FR15; ADR-010).
+    sufficiency: SufficiencyResult | None
 
     # The generate node's tool-call conversation (FR8's ReAct-style loop).
     messages: Annotated[list[BaseMessage], add_messages]
@@ -36,7 +41,8 @@ class GraphState(TypedDict):
     draft_answer: str | None
     citations: list[Citation]
 
-    # faithfulness's verdict (FR6, FR7).
+    # faithfulness's verdict (FR6, FR7, FR-5.4). Stays None if check_sufficiency
+    # short-circuited the request before generate/faithfulness ever ran.
     faithfulness: FaithfulnessResult | None
 
     # response's final API-CONTRACTS.md-shaped dict.

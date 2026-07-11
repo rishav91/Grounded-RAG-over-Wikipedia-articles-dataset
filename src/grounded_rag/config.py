@@ -76,6 +76,15 @@ FAITHFULNESS_CONFIDENCE_THRESHOLD = 0.7
 # open-ended agentic loop.
 TOOL_CALL_MAX_ROUNDS = 1
 
+# FR15 / ADR-010: check_sufficiency's tier-1 score gate, on Cohere's 0-1
+# relevance_score scale (only trusted when reranking actually ran — see
+# ADR-010). Below LOW: obviously hopeless, skip generation entirely. At or
+# above HIGH: obviously fine, skip the tier-2 LLM judge. Between the two:
+# genuinely ambiguous, spend the LLM call. Both are placeholders pending real
+# measurement — see REQUIREMENTS.md Open assumptions.
+SUFFICIENCY_LOW_SCORE_THRESHOLD = 0.2
+SUFFICIENCY_HIGH_SCORE_THRESHOLD = 0.6
+
 
 @dataclass(frozen=True)
 class Settings:

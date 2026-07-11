@@ -18,6 +18,7 @@ contested decision below resolves against.
 | [ADR-007](#adr-007) | Provider-agnostic LLM access, no hard-coded default | Accepted |
 | [ADR-008](#adr-008) | ACL/metadata pre-filter happens before retrieval, not after | Accepted |
 | [ADR-009](#adr-009) | Local-first deployment, cloud-ready scale path | Accepted |
+| [ADR-010](#adr-010) | Tiered (deterministic + LLM) context-sufficiency gate before generation | Accepted |
 
 ---
 
@@ -397,3 +398,82 @@ rewrite.
   "cloud-ready" stays a design claim until M0–M6 are done and someone
   actually does it. Accepted because deployment validation isn't this
   project's measured outcome.
+
+---
+
+<a id="adr-010"></a>
+## ADR-010 — Tiered (deterministic + LLM) context-sufficiency gate before generation
+
+**Context:** M3 (`ADR-006`) catches ungrounded answers *after* generation
+already ran — the judge scores whatever the model drafted against the
+chunks it was given. That leaves a gap the faithfulness check structurally
+cannot close: whether the retrieved context was ever adequate to answer the
+question in the first place is left entirely to the generator's own
+self-assessment (its system prompt asks it to call the retrieval tool or
+admit insufficiency, but nothing independently checks that judgment). A
+model that's overconfident about thin context still gets a full generation
+pass — wasted cost when the context was obviously hopeless (FR15).
+
+**Decision:** Add `check_sufficiency`, a node between `rerank` and
+`generate` that judges the retrieved chunks against the question alone (no
+answer involved) and short-circuits straight to an abstained response when
+they're clearly inadequate — skipping `generate` and `faithfulness`
+entirely for that request. Implemented as three tiers, cheapest first: (1)
+zero chunks retrieved, (2) a deterministic score-gate on Cohere's
+`relevance_score` — comfortably below `SUFFICIENCY_LOW_SCORE_THRESHOLD` is
+insufficient, comfortably above `SUFFICIENCY_HIGH_SCORE_THRESHOLD` is
+sufficient, both skip the LLM — and only (3) genuinely ambiguous cases (or
+a degraded rerank whose fusion-only scores aren't on the same 0-1 scale,
+`FR-3.2`) spend one LLM call, structured-output scored, on a dedicated
+judge prompt.
+
+**Alternatives:**
+- *LLM judge on every request, no score-gate tier* — simpler, one code
+  path. Rejected: spends an LLM call on requests a cheap score check
+  already resolves unambiguously (the obviously-hopeless and
+  obviously-fine cases), working against `AI-ARCHITECTURE.md`'s
+  cost-consciousness and the "at most two LLM calls" framing more than
+  necessary — the same reasoning `ADR-006`'s zero-citation short-circuit
+  and this project's other deterministic-first patterns already establish.
+- *No independent check — trust the generator's self-assessment plus the
+  downstream faithfulness gate* — zero new mechanism, faithfulness already
+  catches the resulting bad answers. Rejected: it catches them *after*
+  paying for a full generation call every time, and conflates two distinct
+  failure populations (context was hopeless vs. context was fine but
+  generation still erred) into one abstain reason, which weakens
+  faithfulness as a diagnostic signal for M3's own quality bar (NFR-7).
+- *Fold sufficiency into the faithfulness judge's own call, post-generation*
+  — one fewer node, reuses the existing call. Rejected: faithfulness scores
+  an answer that's already been drafted; a sufficiency judgment folded in
+  there can no longer prevent the wasted generation call, defeating the
+  point of gating *before* generation.
+
+**Consequences:**
+- `+` Requests with obviously-hopeless context (e.g. UC-5-style,
+  off-corpus queries) skip `generate` and `faithfulness` entirely — a real
+  latency/cost win, not just a correctness one, verified in M3's own eval
+  set once a case's chunk scores fall below the low threshold.
+- `+` Keeps faithfulness's failure signal more diagnostically pure from
+  here on: a faithfulness abstain now more reliably means "context looked
+  adequate but generation still erred," not "there was nothing to work
+  with in the first place" — the latter is caught upstream instead.
+- `+` Fails open on its own LLM call failing (mirrors `FR-3.2`'s Cohere
+  fallback) — a transient sufficiency-judge outage degrades to "proceed to
+  generation," never to blocking a request that might otherwise succeed;
+  faithfulness remains the actual safety-critical gate regardless of
+  whether sufficiency ran cleanly.
+- `−` A third potential LLM call on the hot path for ambiguous-context
+  requests, on top of `generate` and `faithfulness` — real added latency
+  for the tier this call actually fires on, accepted because it's bounded
+  to the ambiguous band by the score-gate tiers rather than firing on
+  every request.
+- `−` The score-gate thresholds (`SUFFICIENCY_LOW_SCORE_THRESHOLD = 0.2`,
+  `SUFFICIENCY_HIGH_SCORE_THRESHOLD = 0.6`) are placeholders picked from a
+  handful of observed cases, not a calibrated distribution — flagged in
+  [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions) pending real
+  measurement, same treatment as `FR-5.1`'s confidence threshold.
+- `−` Only gates the *first* retrieval pass, not the state after a tool
+  call fires (`FR8`) — a second insufficiency after the one extra tool
+  round (`TOOL_CALL_MAX_ROUNDS`) is left to faithfulness to catch, since a
+  second sufficiency gate there would just be a second abstain point
+  competing with the tool-call bound's own termination logic.

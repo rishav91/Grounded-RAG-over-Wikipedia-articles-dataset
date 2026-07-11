@@ -1,12 +1,13 @@
-"""`build_graph`: wires the M3+M4 read path (ADR-001).
+"""`build_graph`: wires the M3-M5 read path (ADR-001).
 
 Matches ARCHITECTURE.md's query-flow diagram:
-cache_lookup -> (hit? response : retrieve); retrieve -> rerank ->
-(allow_generation? check_sufficiency : response);
-check_sufficiency -> (sufficient? generate : response) (FR15; ADR-010);
-generate -> (tool call? execute_tool : faithfulness); execute_tool -> generate;
-faithfulness -> response -> END. A passing response writes through to the
-cache (FR9; ADR-005) before returning.
+cache_lookup -> (hit? response : rewrite_query); rewrite_query -> retrieve
+(FR11; ADR-011) -> rerank -> (allow_generation? check_sufficiency :
+response); check_sufficiency -> (sufficient? generate : response) (FR15;
+ADR-010); generate -> (tool call(s)? execute_tool : faithfulness)
+(FR12; ADR-012); execute_tool -> generate; faithfulness -> response -> END.
+A passing response writes through to the cache (FR9; ADR-005) before
+returning.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from grounded_rag.graph.state import GraphState
 # "judge_faithfulness" not "faithfulness") — langgraph rejects a node id that
 # collides with a state key.
 def _route_after_cache_lookup(state: GraphState) -> str:
-    return "build_response" if state["cache_result"].hit else "retrieve"
+    return "build_response" if state["cache_result"].hit else "rewrite_query"
 
 
 def _route_after_rerank(state: GraphState) -> str:
@@ -48,6 +49,7 @@ def _route_after_generate(state: GraphState) -> str:
 def build_graph(deps: GraphDeps) -> CompiledStateGraph:
     graph = StateGraph(GraphState)
     graph.add_node("cache_lookup", partial(nodes.cache_lookup_node, deps))
+    graph.add_node("rewrite_query", partial(nodes.rewrite_query_node, deps))
     graph.add_node("retrieve", partial(nodes.retrieve_node, deps))
     graph.add_node("rerank", partial(nodes.rerank_node, deps))
     graph.add_node("check_sufficiency", partial(nodes.check_sufficiency_node, deps))
@@ -58,8 +60,11 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph:
 
     graph.add_edge(START, "cache_lookup")
     graph.add_conditional_edges(
-        "cache_lookup", _route_after_cache_lookup, {"retrieve": "retrieve", "build_response": "build_response"}
+        "cache_lookup",
+        _route_after_cache_lookup,
+        {"rewrite_query": "rewrite_query", "build_response": "build_response"},
     )
+    graph.add_edge("rewrite_query", "retrieve")
     graph.add_edge("retrieve", "rerank")
     graph.add_conditional_edges(
         "rerank", _route_after_rerank, {"check_sufficiency": "check_sufficiency", "build_response": "build_response"}

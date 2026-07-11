@@ -49,6 +49,7 @@ def _initial_state(query: str, access_context_groups: list[str]) -> dict:
         "allow_generation": True,
         "bypass_cache": False,
         "cache_result": None,
+        "rewrite": None,
         "chunks": [],
         "reranked": False,
         "sufficiency": None,

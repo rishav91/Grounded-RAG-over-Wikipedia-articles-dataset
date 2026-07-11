@@ -11,13 +11,16 @@ from grounded_rag.graph.build import (
     _route_after_sufficiency,
 )
 from grounded_rag.graph.deps import GraphDeps
-from grounded_rag.graph.nodes import cache_lookup_node, check_sufficiency_node, response_node
+from grounded_rag.graph import nodes as nodes_module
+from grounded_rag.graph.nodes import cache_lookup_node, check_sufficiency_node, response_node, retrieve_node
 from grounded_rag.retrieval.records import RetrievedChunk
+from grounded_rag.rewrite.records import RewriteResult
+from grounded_rag.rewrite.rewrite import RewriteJudgment
 from grounded_rag.sufficiency.records import SufficiencyResult
 from grounded_rag.sufficiency.sufficiency import SufficiencyJudgment
 
 
-def make_chunk(chunk_id: str) -> RetrievedChunk:
+def make_chunk(chunk_id: str, score: float = 0.5) -> RetrievedChunk:
     return RetrievedChunk(
         chunk_id=chunk_id,
         doc_id=f"doc-{chunk_id}",
@@ -26,7 +29,7 @@ def make_chunk(chunk_id: str) -> RetrievedChunk:
         text="text",
         doc_type="short",
         acl_tags=["public"],
-        score=0.5,
+        score=score,
     )
 
 
@@ -40,6 +43,7 @@ def base_state(**overrides) -> dict:
         "allow_generation": True,
         "bypass_cache": False,
         "cache_result": CacheLookupResult(hit=False),
+        "rewrite": RewriteResult(rewritten_query="q", sub_queries=[]),
         "chunks": [make_chunk("c1")],
         "reranked": True,
         "sufficiency": SufficiencyResult(sufficient=True, confidence=0.9, reasoning="ok"),
@@ -175,7 +179,7 @@ def test_route_after_sufficiency():
 
 def test_route_after_cache_lookup():
     assert _route_after_cache_lookup(base_state(cache_result=CacheLookupResult(hit=True))) == "build_response"
-    assert _route_after_cache_lookup(base_state(cache_result=CacheLookupResult(hit=False))) == "retrieve"
+    assert _route_after_cache_lookup(base_state(cache_result=CacheLookupResult(hit=False))) == "rewrite_query"
 
 
 def test_cache_lookup_node_skips_lookup_when_bypass_cache():
@@ -243,6 +247,75 @@ def test_check_sufficiency_node_reuses_faithfulness_llm():
 
     assert result["sufficiency"].sufficient is False
     assert result["sufficiency"].checked_by_llm is True
+
+
+def test_rewrite_query_node_uses_generation_llm():
+    judgment = RewriteJudgment(rewritten_query="rewritten q", sub_queries=["sub1"])
+    deps = GraphDeps(
+        qdrant_client=None,
+        openai_client=None,
+        cohere_client=None,
+        sparse_embedder=None,
+        generation_llm=FakeJudgeLLM(judgment),
+        faithfulness_llm=None,
+    )
+
+    result = nodes_module.rewrite_query_node(deps, base_state())
+
+    assert result["rewrite"].rewritten_query == "rewritten q"
+    assert result["rewrite"].sub_queries == ["sub1"]
+    assert result["rewrite"].rewritten_by_llm is True
+
+
+def test_retrieve_node_merges_primary_and_sub_query_chunks(monkeypatch):
+    def fake_retrieve(qdrant_client, openai_client, sparse_embedder, query, access_context_groups, **kwargs):
+        return {"primary": [make_chunk("a", 0.9)], "sub1": [make_chunk("b", 0.8)]}[query]
+
+    monkeypatch.setattr(nodes_module, "retrieve", fake_retrieve)
+    state = base_state(rewrite=RewriteResult(rewritten_query="primary", sub_queries=["sub1"]))
+
+    result = retrieve_node(make_deps(), state)
+
+    assert {c.chunk_id for c in result["chunks"]} == {"a", "b"}
+
+
+def test_retrieve_node_dedups_overlapping_sub_query_chunks_keeping_higher_score(monkeypatch):
+    def fake_retrieve(qdrant_client, openai_client, sparse_embedder, query, access_context_groups, **kwargs):
+        return {"primary": [make_chunk("a", 0.5)], "sub1": [make_chunk("a", 0.9)]}[query]
+
+    monkeypatch.setattr(nodes_module, "retrieve", fake_retrieve)
+    state = base_state(rewrite=RewriteResult(rewritten_query="primary", sub_queries=["sub1"]))
+
+    result = retrieve_node(make_deps(), state)
+
+    assert len(result["chunks"]) == 1
+    assert result["chunks"][0].score == 0.9
+
+
+def test_retrieve_node_degrades_when_a_sub_query_retrieval_fails(monkeypatch):
+    def fake_retrieve(qdrant_client, openai_client, sparse_embedder, query, access_context_groups, **kwargs):
+        if query == "sub-fail":
+            raise RuntimeError("simulated retrieval outage")
+        return {"primary": [make_chunk("a", 0.9)], "sub-ok": [make_chunk("b", 0.8)]}[query]
+
+    monkeypatch.setattr(nodes_module, "retrieve", fake_retrieve)
+    state = base_state(rewrite=RewriteResult(rewritten_query="primary", sub_queries=["sub-ok", "sub-fail"]))
+
+    result = retrieve_node(make_deps(), state)
+
+    assert {c.chunk_id for c in result["chunks"]} == {"a", "b"}
+
+
+def test_retrieve_node_skips_fan_out_when_no_sub_queries(monkeypatch):
+    def fake_retrieve(qdrant_client, openai_client, sparse_embedder, query, access_context_groups, **kwargs):
+        return [make_chunk("a", 0.9)]
+
+    monkeypatch.setattr(nodes_module, "retrieve", fake_retrieve)
+    state = base_state(rewrite=RewriteResult(rewritten_query="primary", sub_queries=[]))
+
+    result = retrieve_node(make_deps(), state)
+
+    assert [c.chunk_id for c in result["chunks"]] == ["a"]
 
 
 def test_route_after_generate_retrieve_call_goes_to_execute_tool():

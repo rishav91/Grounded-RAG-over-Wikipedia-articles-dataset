@@ -15,6 +15,7 @@ from grounded_rag.cache.records import CacheLookupResult
 from grounded_rag.faithfulness.records import FaithfulnessResult
 from grounded_rag.generation.records import Citation
 from grounded_rag.retrieval.records import RetrievedChunk
+from grounded_rag.rewrite.records import RewriteResult
 from grounded_rag.sufficiency.records import SufficiencyResult
 
 
@@ -32,6 +33,11 @@ class GraphState(TypedDict):
     # "cache_result" — avoids the node-id/state-key collision langgraph
     # rejects at add_node time (see M3's judge_faithfulness/faithfulness).
     cache_result: CacheLookupResult | None
+
+    # rewrite_query's output (FR11; ADR-011) — None if cache_lookup hit and
+    # this node never ran. Node id "rewrite_query" matches the state key
+    # here (no collision — "rewrite" isn't a node id).
+    rewrite: RewriteResult | None
 
     # Retrieval/rerank output — grows if the retrieval tool fires (FR8).
     chunks: list[RetrievedChunk]

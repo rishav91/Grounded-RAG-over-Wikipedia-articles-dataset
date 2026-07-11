@@ -5,6 +5,8 @@ bound to a `GraphDeps` via `functools.partial` in `build.py`.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from grounded_rag.cache.cache import lookup_cache, write_cache
@@ -17,8 +19,27 @@ from grounded_rag.graph.deps import GraphDeps
 from grounded_rag.graph.state import GraphState
 from grounded_rag.graph.tool import build_retrieve_tool
 from grounded_rag.rerank.rerank import rerank
+from grounded_rag.retrieval.records import RetrievedChunk
 from grounded_rag.retrieval.retrieve import retrieve
+from grounded_rag.rewrite.rewrite import rewrite_query
 from grounded_rag.sufficiency.sufficiency import check_sufficiency
+
+
+def _merge_dedup_chunks(chunk_lists: list[list[RetrievedChunk]]) -> list[RetrievedChunk]:
+    """Merges several chunk lists (e.g. concurrent retrieve() calls) into
+    one, deduped by chunk_id — the highest score for a given chunk wins on a
+    collision, first-seen order otherwise (ADR-011, ADR-012)."""
+    best: dict[str, RetrievedChunk] = {}
+    order: list[str] = []
+    for chunks in chunk_lists:
+        for chunk in chunks:
+            existing = best.get(chunk.chunk_id)
+            if existing is None:
+                order.append(chunk.chunk_id)
+                best[chunk.chunk_id] = chunk
+            elif chunk.score > existing.score:
+                best[chunk.chunk_id] = chunk
+    return [best[chunk_id] for chunk_id in order]
 
 
 def cache_lookup_node(deps: GraphDeps, state: GraphState) -> dict:
@@ -32,17 +53,41 @@ def cache_lookup_node(deps: GraphDeps, state: GraphState) -> dict:
     return {"cache_result": result}
 
 
+def rewrite_query_node(deps: GraphDeps, state: GraphState) -> dict:
+    result = rewrite_query(deps.generation_llm, state["query"])
+    return {"rewrite": result}
+
+
 def retrieve_node(deps: GraphDeps, state: GraphState) -> dict:
-    chunks = retrieve(
-        deps.qdrant_client,
-        deps.openai_client,
-        deps.sparse_embedder,
-        state["query"],
-        state["access_context_groups"],
-        doc_type=state["doc_type"],
-        date_range=state["date_range"],
-    )
-    return {"chunks": chunks}
+    rewrite = state["rewrite"]
+
+    def run(query: str) -> list[RetrievedChunk]:
+        return retrieve(
+            deps.qdrant_client,
+            deps.openai_client,
+            deps.sparse_embedder,
+            query,
+            state["access_context_groups"],
+            doc_type=state["doc_type"],
+            date_range=state["date_range"],
+        )
+
+    primary_chunks = run(rewrite.rewritten_query)
+    if not rewrite.sub_queries:
+        return {"chunks": primary_chunks}
+
+    def run_sub(query: str) -> list[RetrievedChunk]:
+        try:
+            return run(query)
+        except Exception:
+            # FR12/ADR-011: one sub-query's retrieval failing degrades that
+            # leg only — the primary retrieval above is the hard dependency.
+            return []
+
+    with ThreadPoolExecutor(max_workers=len(rewrite.sub_queries)) as pool:
+        sub_results = list(pool.map(run_sub, rewrite.sub_queries))
+
+    return {"chunks": _merge_dedup_chunks([primary_chunks, *sub_results])}
 
 
 def rerank_node(deps: GraphDeps, state: GraphState) -> dict:

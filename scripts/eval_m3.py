@@ -68,6 +68,7 @@ def _initial_state(query: str, access_context_groups: list[str]) -> dict:
         # options.bypass_cache).
         "bypass_cache": True,
         "cache_result": None,
+        "rewrite": None,
         "chunks": [],
         "reranked": False,
         "sufficiency": None,

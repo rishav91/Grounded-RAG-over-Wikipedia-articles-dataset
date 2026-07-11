@@ -95,6 +95,15 @@ CACHE_SIMILARITY_THRESHOLD = 0.92
 SUFFICIENCY_LOW_SCORE_THRESHOLD = 0.2
 SUFFICIENCY_HIGH_SCORE_THRESHOLD = 0.6
 
+# FR11 / ADR-011: caps how many independent sub_queries rewrite_query may
+# produce for one request — bounded, not an open-ended decomposition.
+QUERY_REWRITE_MAX_SUB_QUERIES = 3
+
+# FR12 / ADR-012: caps how many retrieve_chunks calls execute_tool_node will
+# run concurrently in a single round — bounded, mirrors TOOL_CALL_MAX_ROUNDS'
+# "not an open-ended agentic loop" spirit, applied to within-round fan-out.
+MAX_PARALLEL_RETRIEVE_CALLS = 3
+
 
 @dataclass(frozen=True)
 class Settings:

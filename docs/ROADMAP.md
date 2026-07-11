@@ -71,17 +71,17 @@ fusion-ranked response.
 
 ## M3 — Grounded generation, citations, faithfulness, abstain, tool use (FR5, FR6, FR7, FR8)
 
-- [ ] **M3 status: not started**
+- [x] **M3 status: done** — merged to `main`, verified (`scripts/eval_m3.py`: NFR-9 citation validity PASS, NFR-8 abstain correctness PASS, FR-4.2 tool-call bound PASS across repeated runs; UC-8 faithfulness pass rate 66.7%–100% across repeated runs — see [REQUIREMENTS.md](REQUIREMENTS.md#open-assumptions))
 
 **Goal:** the centerpiece milestone — wires the LangGraph read path
 end-to-end and proves the governing principle (verifiable-or-abstain) holds
 on real queries.
 
 **Ships:**
-- [ ] `generate` node: citation-constrained answer generation from the top-k, via the provider-agnostic LLM (`ADR-007`)
-- [ ] The retrieval tool (FR8), bound to `generate`, inheriting the original request's `access_context`/filters (FR-4.3)
-- [ ] `faithfulness` node: LLM-as-judge scoring (`ADR-006`), gating the abstain decision
-- [ ] `response` node: the full structured API response shape ([API-CONTRACTS.md](API-CONTRACTS.md))
+- [x] `generate` node: citation-constrained answer generation from the top-k, via the provider-agnostic LLM (`ADR-007`)
+- [x] The retrieval tool (FR8), bound to `generate`, inheriting the original request's `access_context`/filters (FR-4.3)
+- [x] `faithfulness` node: LLM-as-judge scoring (`ADR-006`), gating the abstain decision
+- [x] `response` node: the full structured API response shape ([API-CONTRACTS.md](API-CONTRACTS.md))
 
 **Unlocks:** the first end-to-end answer the project produces. Also the
 first real test of `ADR-001`'s LangGraph bet — the retrieval-tool loop is

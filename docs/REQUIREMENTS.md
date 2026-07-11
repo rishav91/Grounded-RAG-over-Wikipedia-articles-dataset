@@ -164,12 +164,21 @@ real measurement exists:
   `retrieve`'s job, not `rerank`'s). Neither number was massaged to hit the
   original placeholder — see [ROADMAP.md](ROADMAP.md#m1--hybrid-retrieval-plus-filtering-fr2-fr3)
   and [ROADMAP.md](ROADMAP.md#m2--reranking-fr4).
-- **FR-5.1 confidence threshold (0.7):** an arbitrary starting cut for
-  "passes faithfulness" — tune once the LLM-as-judge's actual score
-  distribution is observed in M3.
-- **NFR-7 faithfulness rate (98%):** a placeholder quality bar; the real
-  target should be set from the eval set's actual measured ceiling, not
-  assumed in advance.
+- **FR-5.1 confidence threshold (0.7):** M3 (`scripts/eval_m3.py`, UC-8, `gpt-4o-mini`
+  for both `generate` and `faithfulness`): the judge's scores cluster at 0.9–1.0 on
+  clearly-supported answers and drop to 0.5–0.6 on borderline cases (a citation that's
+  topically relevant but only loosely entails the specific claim), so 0.7 sits in a
+  real gap in the observed distribution rather than being retired — kept as-is, not
+  retuned, pending a larger eval set than 3 cases.
+- **NFR-7 faithfulness rate (98%):** M3 (`scripts/eval_m3.py`, UC-8, 3 cases, `gpt-4o-mini`):
+  observed 66.7%–100% across repeated runs (2/3–3/3 passing), below the 98%
+  placeholder — the one recurring abstain is a genuinely borderline case (a
+  citation the judge sometimes scores as only loosely supporting its claim),
+  not a fabrication (NFR-8, the zero-tolerance bar, held at 100% every run).
+  Not massaged to hit the placeholder — see
+  [ROADMAP.md](ROADMAP.md#m3--grounded-generation-citations-faithfulness-abstain-tool-use-fr5-fr6-fr7-fr8).
+  A 3-case sample is too small to retire this number; revisit with a larger
+  eval set before trusting it as a real ceiling.
 - **Cache-hit similarity threshold (cosine ≥ 0.92, [DATA-MODEL.md](DATA-MODEL.md)):**
   picked without real paraphrase data; tune against observed false-hit rate
   once M4 is built.

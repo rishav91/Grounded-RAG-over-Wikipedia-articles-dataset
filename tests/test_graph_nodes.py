@@ -4,6 +4,7 @@ from grounded_rag.cache.records import CacheLookupResult
 from grounded_rag.faithfulness.records import FaithfulnessResult
 from grounded_rag.generation.generate import RETRIEVE_TOOL_NAME, SUBMIT_ANSWER_TOOL_NAME
 from grounded_rag.generation.records import Citation
+from grounded_rag.graph import nodes as nodes_module
 from grounded_rag.graph.build import (
     _route_after_cache_lookup,
     _route_after_generate,
@@ -11,7 +12,6 @@ from grounded_rag.graph.build import (
     _route_after_sufficiency,
 )
 from grounded_rag.graph.deps import GraphDeps
-from grounded_rag.graph import nodes as nodes_module
 from grounded_rag.graph.nodes import cache_lookup_node, check_sufficiency_node, response_node, retrieve_node
 from grounded_rag.retrieval.records import RetrievedChunk
 from grounded_rag.rewrite.records import RewriteResult

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from grounded_rag.config import (
     ACL_GROUPS,
@@ -48,7 +48,7 @@ def derive_acl_tags(doc_id: str) -> list[str]:
 
 def derive_dates(doc_id: str) -> tuple[datetime, datetime]:
     h = _doc_hash(doc_id)
-    created_at = datetime(2020, 1, 1, tzinfo=timezone.utc) + timedelta(days=h % 1000)
+    created_at = datetime(2020, 1, 1, tzinfo=UTC) + timedelta(days=h % 1000)
     updated_at = created_at + timedelta(days=(h // 1000) % 200)
     return created_at, updated_at
 

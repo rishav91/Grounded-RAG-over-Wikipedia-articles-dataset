@@ -23,8 +23,8 @@ from grounded_rag.config import (
     DENSE_VECTOR_NAME,
     EMBEDDING_DIM,
     SPARSE_VECTOR_NAME,
-    Settings,
     UPSERT_BATCH_SIZE,
+    Settings,
 )
 from grounded_rag.ingestion.embeddings import SparseVector as LocalSparseVector
 from grounded_rag.ingestion.records import ChunkRecord

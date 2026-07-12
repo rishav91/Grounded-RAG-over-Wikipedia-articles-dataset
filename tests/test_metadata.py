@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from grounded_rag.ingestion.metadata import derive_acl_tags, derive_dates, derive_doc_type, derive_metadata
 
@@ -32,7 +32,7 @@ def test_dates_are_deterministic_and_ordered():
     created_at, updated_at = derive_dates("doc-1")
     assert (created_at, updated_at) == derive_dates("doc-1")
     assert updated_at >= created_at
-    assert created_at >= datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assert created_at >= datetime(2020, 1, 1, tzinfo=UTC)
 
 
 def test_derive_metadata_bundles_all_fields():
